@@ -1,0 +1,121 @@
+// Package ui holds reusable, cluster-agnostic view helpers.
+package ui
+
+import (
+	"charm.land/bubbles/v2/table"
+	"charm.land/lipgloss/v2"
+
+	"github.com/ctrl-research/seaglass/internal/k8s"
+)
+
+// cellPad is the horizontal padding the Bubbles table adds per cell (one
+// space each side by default).
+const cellPad = 2
+
+// minColWidth is the narrowest a column may be squeezed before we give up
+// and let it truncate.
+const minColWidth = 6
+
+// FitColumns chooses which server columns to show and how wide, given the
+// terminal width. Priority 0 columns are always included; higher priorities
+// are added in order while they fit. Returns the table columns and the
+// indices into the source cells that each corresponds to.
+func FitColumns(cols []k8s.Column, rows []k8s.Row, width int) ([]table.Column, []int) {
+	if len(cols) == 0 || width <= 0 {
+		return nil, nil
+	}
+	natural := make([]int, len(cols))
+	for i, c := range cols {
+		natural[i] = lipgloss.Width(c.Name)
+	}
+	for _, r := range rows {
+		for i := 0; i < len(cols) && i < len(r.Cells); i++ {
+			if w := lipgloss.Width(r.Cells[i]); w > natural[i] {
+				natural[i] = w
+			}
+		}
+	}
+
+	// Always-on columns.
+	var idx []int
+	used := 0
+	for i, c := range cols {
+		if c.Priority == 0 {
+			idx = append(idx, i)
+			used += natural[i] + cellPad
+		}
+	}
+	// Optional columns by ascending priority, in server order within a tier.
+	maxPri := int32(0)
+	for _, c := range cols {
+		if c.Priority > maxPri {
+			maxPri = c.Priority
+		}
+	}
+	for p := int32(1); p <= maxPri; p++ {
+		for i, c := range cols {
+			if c.Priority != p {
+				continue
+			}
+			if used+natural[i]+cellPad <= width {
+				idx = append(idx, i)
+				used += natural[i] + cellPad
+			}
+		}
+	}
+	// Keep server order so the table reads like kubectl.
+	sortInts(idx)
+
+	widths := make([]int, len(idx))
+	for k, i := range idx {
+		widths[k] = natural[i]
+	}
+	// Shrink the widest columns until the required set fits.
+	for used > width {
+		widest := -1
+		for k, w := range widths {
+			if w > minColWidth && (widest < 0 || w > widths[widest]) {
+				widest = k
+			}
+		}
+		if widest < 0 {
+			break
+		}
+		widths[widest]--
+		used--
+	}
+	// Give leftover space to the last column so the selection bar spans
+	// the terminal.
+	if len(widths) > 0 && used < width {
+		widths[len(widths)-1] += width - used
+	}
+
+	out := make([]table.Column, len(idx))
+	for k, i := range idx {
+		out[k] = table.Column{Title: cols[i].Name, Width: widths[k]}
+	}
+	return out, idx
+}
+
+// ProjectRows converts k8s rows to table rows using the chosen column indices.
+func ProjectRows(rows []k8s.Row, idx []int) []table.Row {
+	out := make([]table.Row, len(rows))
+	for r, row := range rows {
+		cells := make(table.Row, len(idx))
+		for k, i := range idx {
+			if i < len(row.Cells) {
+				cells[k] = row.Cells[i]
+			}
+		}
+		out[r] = cells
+	}
+	return out
+}
+
+func sortInts(a []int) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j] < a[j-1]; j-- {
+			a[j], a[j-1] = a[j-1], a[j]
+		}
+	}
+}
