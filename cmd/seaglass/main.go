@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
 
 	"github.com/ctrl-research/seaglass/internal/app"
@@ -71,7 +70,7 @@ func run() error {
 	m := app.New(app.Options{
 		Client:    client,
 		Namespace: ns,
-		Resource:  schema.GroupVersionResource{Version: "v1", Resource: "pods"},
+		Resource:  k8s.Pods,
 	})
 	_, err = tea.NewProgram(m).Run()
 	return err

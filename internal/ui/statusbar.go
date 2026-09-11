@@ -12,10 +12,13 @@ import (
 type StatusBar struct {
 	Context   string
 	Namespace string
-	Resource  string
-	Rows      int
-	State     string
-	Err       string
+	// Crumbs is the navigation stack, outermost first.
+	Crumbs []string
+	Rows   int
+	State  string
+	Err    string
+	// Hint is shown on the right when there is no error, e.g. key help.
+	Hint string
 }
 
 var (
@@ -34,7 +37,10 @@ func (s StatusBar) Render(width int) string {
 		ns = "all"
 	}
 	sep := sepStyle.Render(" › ")
-	left := crumbStyle.Render(s.Context) + sep + crumbStyle.Render(ns) + sep + crumbStyle.Render(s.Resource)
+	left := crumbStyle.Render(s.Context) + sep + crumbStyle.Render(ns)
+	for _, c := range s.Crumbs {
+		left += sep + crumbStyle.Render(c)
+	}
 
 	var right string
 	switch {
@@ -44,6 +50,9 @@ func (s StatusBar) Render(width int) string {
 		right = barStyle.Render(fmt.Sprintf("%d rows ", s.Rows)) + liveStyle.Render("● live")
 	default:
 		right = barStyle.Render(fmt.Sprintf("%d rows ", s.Rows)) + warnStyle.Render("◌ "+s.State)
+	}
+	if s.Hint != "" && s.Err == "" {
+		right = sepStyle.Render(s.Hint+"  ") + right
 	}
 
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right) - 2

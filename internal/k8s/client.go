@@ -5,6 +5,7 @@ package k8s
 
 import (
 	"fmt"
+	"sort"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -22,7 +23,23 @@ type Client struct {
 	// Namespace is the default namespace for the context, or the override.
 	Namespace string
 
+	cfg  *rest.Config
 	rest *rest.RESTClient
+}
+
+// ListContexts returns the context names in kubeconfig and the current one.
+func ListContexts() (names []string, current string, err error) {
+	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{})
+	raw, err := cc.RawConfig()
+	if err != nil {
+		return nil, "", fmt.Errorf("load kubeconfig: %w", err)
+	}
+	for name := range raw.Contexts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, raw.CurrentContext, nil
 }
 
 // New loads kubeconfig using the standard loading rules ($KUBECONFIG, then
@@ -71,7 +88,7 @@ func New(kubeContext, namespace string) (*Client, error) {
 		return nil, fmt.Errorf("build rest client: %w", err)
 	}
 
-	return &Client{Context: ctxName, Namespace: ns, rest: rest}, nil
+	return &Client{Context: ctxName, Namespace: ns, cfg: cfg, rest: rest}, nil
 }
 
 // resourcePath returns the URL path segments for a resource collection.

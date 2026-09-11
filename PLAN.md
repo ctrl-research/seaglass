@@ -100,16 +100,21 @@ Gate: I can open it against production and see pods update live.
 
 ### M1 — Browse (about 2 weeks) → `v0.0.2`
 
-- Command palette (`:` or `ctrl+p`): fuzzy over all discovered resource
-  types (short names, plurals, CRDs), namespaces, contexts, and actions.
-- Namespace picker with "all namespaces". Context picker that rebuilds the
+- [x] Discovery of every list+watch resource, cached on disk for an hour.
+- [x] Command palette (`:` or `ctrl+p`): fuzzy over all discovered resource
+  types (short names, plurals, CRDs), namespaces, contexts. Multi-term
+  queries (`ns kube`) must all match.
+- [x] Namespace picker via the palette. Context picker that rebuilds the
   client and resets the stack.
-- Row filter (`/`) with fuzzy match and highlight.
-- Detail view (`d`): describe-style summary. YAML view (`y`) with syntax
+- [x] Navigation stack with breadcrumbs and `esc`. Hidden views stop
+  their streams; popping restarts the stream.
+- [ ] "All namespaces" as a palette entry.
+- [ ] Row filter (`/`) with fuzzy match and highlight.
+- [ ] Detail view (`d`): describe-style summary. YAML view (`y`) with syntax
   highlighting and copy-to-clipboard.
-- Column sort (`shift+letter` or a sort picker). Wide/narrow column toggle.
-- Navigation stack with breadcrumbs and `esc`.
-- Generated help overlay (`?`) from the keymap.
+- [ ] Column sort (`shift+letter` or a sort picker). Wide/narrow column toggle.
+- [ ] Generated help overlay (`?`) from the keymap.
+- [ ] Persist last context/namespace/resource between runs.
 
 Gate: I use seaglass instead of k9s for all read-only browsing for a week.
 

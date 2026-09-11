@@ -1,8 +1,10 @@
 package k8s
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -101,5 +103,40 @@ func TestStoreApply(t *testing.T) {
 	snap = st.snapshot()
 	if len(snap.Rows) != 1 || snap.Rows[0].Name != "a" {
 		t.Errorf("delete not applied: %+v", snap.Rows)
+	}
+}
+
+func TestSanitizeHost(t *testing.T) {
+	cases := map[string]string{
+		"https://127.0.0.1:6443":                      "127.0.0.1_6443",
+		"https://ABC.gr7.us-east-1.eks.amazonaws.com": "ABC.gr7.us-east-1.eks.amazonaws.com",
+		"http://[::1]:8080/":                          "1_8080",
+	}
+	for in, want := range cases {
+		if got := sanitize(in); got != want {
+			t.Errorf("sanitize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSendDropsStaleWhenFull(t *testing.T) {
+	out := make(chan Update, 1)
+	ctx := context.Background()
+	if !send(ctx, out, Update{Status: StatusConnecting}) {
+		t.Fatal("first send failed")
+	}
+	// Consumer has not drained; second send must not block and must win.
+	done := make(chan bool)
+	go func() { done <- send(ctx, out, Update{Status: StatusLive}) }()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("second send reported failure")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("send blocked on a full channel")
+	}
+	if got := <-out; got.Status != StatusLive {
+		t.Errorf("expected the fresher update, got %v", got.Status)
 	}
 }

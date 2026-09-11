@@ -1,0 +1,24 @@
+#!/usr/bin/expect -f
+# Usage: drive.exp <cols> <rows> <outfile> <args...> -- <keys...>
+# Keys are sent 1s apart; the pause drains pty output so the app never
+# blocks on a full pty buffer (which plain `sleep` would cause).
+set cols [lindex $argv 0]
+set rows [lindex $argv 1]
+set out  [lindex $argv 2]
+set sep [lsearch $argv "--"]
+set args [lrange $argv 3 [expr {$sep - 1}]]
+set keys [lrange $argv [expr {$sep + 1}] end]
+log_user 0
+log_file -a -noappend $out
+spawn -noecho ./bin/seaglass {*}$args
+set pid [exp_pid]
+stty rows $rows cols $cols < $spawn_out(slave,name)
+set ::done 0
+proc pause {secs} { set ::timeout $secs; expect { timeout {} eof { set ::done 1 } } }
+pause 3
+foreach k $keys { if {$::done} break; send [subst -nocommands -novariables $k]; pause 1 }
+if {$::done} { puts "exited cleanly" } else {
+  set timeout 5
+  if {[catch { expect { eof { puts "exited cleanly" } timeout { exec kill -9 $pid; puts "STUCK, killed" } } }]} { puts "exited cleanly" }
+}
+catch { wait }

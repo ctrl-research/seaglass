@@ -21,5 +21,31 @@ make run ARGS="--context kind-seaglass-dev -A --debug"
 
 Debug logs go to `~/.local/state/seaglass/seaglass.log` (or `$XDG_STATE_HOME`).
 
-Status: M0 skeleton. Lists pods with live updates, server-side columns,
-`j`/`k`/arrows to move, `q` to quit.
+## Keys
+
+| Key | Action |
+|---|---|
+| `:` or `ctrl+p` | Command palette: fuzzy search resource types, namespaces, contexts |
+| `enter` | Open the selected palette item |
+| `esc` | Close the palette, or go back one view |
+| `j`/`k`, arrows, `pgup`/`pgdn`, `g`/`G` | Move in the table |
+| `q` or `ctrl+c` | Quit |
+
+Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
+`ctx prod` narrows to contexts. Choosing a resource pushes a new view;
+choosing a namespace keeps the current resource and resets the view stack;
+choosing a context reconnects.
+
+Status: M1 in progress. Any list+watch resource type, live updates,
+server-side columns, palette, navigation stack with breadcrumbs.
+
+## Driving the TUI headlessly
+
+`hack/drive.exp` runs seaglass in a pseudo-terminal, sends keys one second
+apart, and records the raw output. Useful for smoke tests against a kind
+cluster:
+
+```sh
+make build
+hack/drive.exp 120 30 /tmp/out.raw --context kind-seaglass-dev -A -- ":" "deploy" "\\r" "\\033" "q"
+```

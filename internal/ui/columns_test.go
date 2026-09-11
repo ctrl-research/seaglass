@@ -47,7 +47,7 @@ func TestFitColumnsShrinksWhenRequiredOverflow(t *testing.T) {
 }
 
 func TestStatusBarWidth(t *testing.T) {
-	s := StatusBar{Context: "homelab", Namespace: "default", Resource: "pods", Rows: 12, State: "live"}
+	s := StatusBar{Context: "homelab", Namespace: "default", Crumbs: []string{"pods", "deployments"}, Rows: 12, Hint: ": palette  esc back  q quit", State: "live"}
 	for _, w := range []int{40, 80, 200} {
 		if got := visibleWidth(s.Render(w)); got != w {
 			t.Errorf("width %d: rendered %d", w, got)

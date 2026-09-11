@@ -161,7 +161,7 @@ func (c *Client) list(ctx context.Context, gvr schema.GroupVersionResource, name
 
 // watch runs one watch connection. It returns relist=true when the server
 // reports the resource version is gone, and a non-nil error on failure.
-func (c *Client) watch(ctx context.Context, gvr schema.GroupVersionResource, namespace, rv string, st *store, out chan<- Update) (relist bool, err error) {
+func (c *Client) watch(ctx context.Context, gvr schema.GroupVersionResource, namespace, rv string, st *store, out chan Update) (relist bool, err error) {
 	w, err := c.rest.Get().
 		AbsPath(resourcePath(gvr, namespace)...).
 		SetHeader("Accept", tableAccept).
@@ -228,9 +228,11 @@ func fromUnstructured(u *unstructured.Unstructured, into any) error {
 }
 
 // send delivers u unless ctx is done. It reports whether delivery happened.
-// The channel has capacity 1 and the UI drains it, but a slow consumer
-// should never block the watch forever, so we also drop the stale value.
-func send(ctx context.Context, out chan<- Update, u Update) bool {
+// The channel has capacity 1. If the consumer has not drained the previous
+// update yet, that stale value is discarded in favor of the fresher one:
+// snapshots are complete, so nothing is lost and the watch never blocks on
+// a slow UI.
+func send(ctx context.Context, out chan Update, u Update) bool {
 	for {
 		select {
 		case <-ctx.Done():
@@ -238,22 +240,12 @@ func send(ctx context.Context, out chan<- Update, u Update) bool {
 		case out <- u:
 			return true
 		default:
-			// Buffer full: discard the stale pending update and retry with
-			// the fresher one. Snapshots are complete, so nothing is lost.
 			select {
-			case <-outDrain(out):
+			case <-out:
 			default:
 			}
 		}
 	}
-}
-
-// outDrain is a small trick to receive from a send-only channel; Go does not
-// allow it directly, so Stream owns a bidirectional channel and this helper
-// is only ever called with that channel.
-func outDrain(out chan<- Update) <-chan Update {
-	// This cast is safe because Stream creates out as chan Update.
-	return (chan Update)(any(out).(chan Update))
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {
