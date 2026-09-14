@@ -29,13 +29,16 @@ These are the bets. Anything not on this list is a non-goal until v0.1.
    with sane defaults. No skins/plugins/hotkeys/aliases split across files.
 8. **Fast to open.** Lazy informers (only the resource on screen), discovery
    cached on disk, sub-second to first table.
-9. **GitOps-aware, Flux first.** k9s has no Flux features beyond community
-   plugins. seaglass shows what Flux manages an object, why a Kustomization
-   or HelmRelease is not Ready, and lets you reconcile, suspend, and resume
-   without leaving. Built on generic mechanisms (label-based jumps, patch
-   actions, multi-resource views) so Argo CD later is configuration, not code.
+9. **Operators are configuration, not code.** Most operator support is
+   three declarative things: an action that patches an annotation or field,
+   a jump that follows a label or spec field to another object, and a badge
+   that colors a row from a condition. seaglass ships those as a config
+   layer with built-in presets, Flux first. k9s has no Flux features beyond
+   community shell plugins; here a cert-manager or Argo CD preset is a YAML
+   file and a fixture, not a milestone.
 
-Non-goals for now: multi-cluster views, a plugin system, metrics/pulses
+Non-goals for now: multi-cluster views, code plugins (Go or shell-arg
+style; the M4 config layer is the plugin system), metrics/pulses
 dashboards, Helm (outside Flux HelmReleases), xray-style trees, mouse
 support, Windows.
 
@@ -134,6 +137,11 @@ Gate: I use seaglass instead of k9s for all read-only browsing for a week.
 
 ### M2 — Operate (about 2 weeks) → `v0.0.3`
 
+Build the patch/action engine first (see M4) and express the built-in
+actions on it: rollout restart is an annotation patch, scale and suspend
+are field patches, delete is a verb. Only exec, logs, port-forward, and
+edit need bespoke code. This avoids writing the actions twice.
+
 - Logs (`l`): follow, container picker or merged multi-container view,
   `--since`, timestamps toggle, regex filter, wrap toggle, save to file.
 - Exec shell into a container (`s`) via `tea.ExecProcess`.
@@ -149,6 +157,11 @@ Gate: k9s is uninstalled.
 
 ### M3 — Relationships and events (about 1 week) → `v0.0.4`
 
+Owner references, label selectors, and field references are the three
+jump kinds. Implement them as the jump engine (see M4) with the built-in
+Kubernetes relationships as the default rule set, so operator presets
+reuse them.
+
 - Owner jump (`o`): Pod → ReplicaSet → Deployment, Job → CronJob, etc.
 - Related jump (`shift+r`): Service → Endpoints → Pods, Deployment → Pods
   by selector, Pod → Node, Node → Pods, ConfigMap/Secret → mounting Pods.
@@ -159,51 +172,64 @@ Gate: k9s is uninstalled.
 
 Gate: I can diagnose a failing rollout without leaving the tool.
 
-### M4 — Flux (about 1 to 2 weeks) → `v0.0.5`
+### M4 — Operators via config, Flux preset (about 2 weeks) → `v0.0.5`
 
-Already free, thanks to discovery and the Table transform: every Flux CRD
-(Kustomization, HelmRelease, GitRepository, OCIRepository, HelmRepository,
-HelmChart, Bucket, Alert, Provider, Receiver, ImageRepository, ImagePolicy,
-ImageUpdateAutomation) lists with its own Ready/Status/Age columns, and the
-detail view shows its conditions, including the Ready message that carries
-the applied revision.
+A declarative layer for operator support. Presets ship inside the binary
+under `presets/*.yaml`; users override or add rules in `seaglass.yaml`.
+Every rule is testable with a fixture object and runs through the same
+patch, get, and watch paths as the built-in features.
 
-- [ ] Flux overview: a `flux` palette entry opens one table of every Flux
-  kind in scope, not-ready rows first, with a KIND column. Built as a
-  generic "resource group" view that merges several streams, reusable for
-  a workloads group (Deployments, StatefulSets, DaemonSets, Jobs).
-- [ ] Reconcile: patch `reconcile.fluxcd.io/requestedAt` on the selected
-  object; offer "with source" to reconcile the source first, like
-  `flux reconcile --with-source`. Then watch until
-  `status.lastHandledReconcileAt` matches and report Ready or the failure
-  message in the status bar.
-- [ ] Suspend and resume: patch `spec.suspend`, with a confirm on suspend.
-  Suspended rows get a muted color.
-- [ ] Not-ready surfacing: rows with a Ready=False condition get a warning
-  color in every table. Kustomization and HelmRelease detail shows
-  `lastAppliedRevision`, `lastAttemptedRevision`, and the Ready message
-  at the top, before the generic sections.
-- [ ] Trace (`flux trace`): from any object, follow the
-  `kustomize.toolkit.fluxcd.io/name` and `/namespace` labels (or the
-  `helm.toolkit.fluxcd.io/*` labels) to its Kustomization or HelmRelease,
-  then `spec.sourceRef` to the source, and show the chain in the detail
-  view: "Managed by Kustomization/apps ← GitRepository/flux-system @
-  main/abc1234". Each link is jumpable.
-- [ ] Inventory: Kustomization detail lists `status.inventory.entries` as
-  a jumpable list of the objects it manages. HelmRelease jumps to its
-  workloads by label.
-- [ ] Dependencies: Kustomization detail shows `spec.dependsOn` with each
-  dependency's Ready state, so a stuck chain is visible at a glance.
+Config types:
+
+- **actions**: match on group/kind (globs allowed), a key or palette name,
+  a patch (dotted paths to values, templated with `now`, `.metadata.*`,
+  `.spec.*`), optional `confirm`, optional `wait` on a status field or
+  condition with a timeout. Result reported in the status bar.
+- **jumps**: from a label pair, an annotation, or a spec field shaped like
+  a reference (`kind`/`name`/`namespace`) to a target kind. Shown in the
+  detail view and under a related-objects key.
+- **badges**: match plus a condition or field predicate, mapped to a row
+  style (warning, error, muted) and an optional short tag.
+- **commands**: the escape hatch. Run a program with the selected object's
+  fields in the environment via `tea.ExecProcess`. Clearly labeled as the
+  unsafe path; no argument templating beyond env vars.
+
+Work items:
+
+- [ ] Rule schema, loader, validation with line-numbered errors, and
+  `seaglass presets list|show`.
+- [ ] Action engine: JSON merge patch with dry-run, template rendering,
+  confirm dialog, wait loop that watches one object until the predicate
+  holds or times out.
+- [ ] Jump engine over the three jump kinds; detail view lists jumps with
+  the target's Ready state where the target has conditions.
+- [ ] Badge engine applied in every table view.
+- [ ] Commands via ExecProcess with terminal release and restore.
+- [ ] Flux preset: reconcile (with source), suspend, resume; jumps for
+  managed-by labels and `spec.sourceRef`; badges for Ready=False and
+  `spec.suspend`; the `flux` resource group listing every Flux kind.
+- [ ] Flux code items that config cannot express: parse
+  `status.inventory.entries` (`ns_name_group_kind`) into a jumpable list;
+  compose the trace chain "Managed by Kustomization/apps ← GitRepository/
+  flux-system @ main/abc1234" by walking jump rules; show
+  `lastAppliedRevision`, `lastAttemptedRevision`, `spec.dependsOn` with
+  each dependency's Ready state at the top of Kustomization and
+  HelmRelease detail.
+- [ ] Generic resource-group view: one table merging several streams with
+  a KIND column, not-ready first. Used by the `flux` group and a
+  `workloads` group (Deployments, StatefulSets, DaemonSets, Jobs).
 - [ ] Fixtures: `make demo-flux` runs `flux install` on the kind cluster and
-  applies a GitRepository plus Kustomization pointing at a public sample
-  (fluxcd/flux2-kustomize-helm-example or podinfo), including one that is
-  deliberately broken.
+  applies a working and a deliberately broken Kustomization. Unit tests
+  run every preset rule against fixture objects.
 
-Parked for Flux: `flux diff` (needs a local kustomize build), image
-automation views, controller log correlation per object, Argo CD.
+Parked: `flux diff` (needs a local kustomize build), image automation
+views, controller log correlation per object. cert-manager and Argo CD
+presets are the first follow-ups and should each be a YAML file plus a
+fixture.
 
 Gate: I stop reaching for the `flux` CLI to check why something is not
-Ready, and to reconcile it.
+Ready, and to reconcile it. Adding a suspend action for an in-house
+operator takes five minutes and no Go.
 
 ### M5 — Config, polish, resilience (about 1 week) → `v0.0.6`
 
@@ -237,7 +263,8 @@ Only when it has earned it. Everything before this is `go install` only.
 
 Multi-cluster fleet view, metrics-server integration for CPU/memory columns,
 plugin/hook system, Helm releases view, RBAC "can I" view, node shell,
-benchmarking, mouse support, Argo CD support on the Flux mechanisms.
+benchmarking, mouse support. cert-manager and Argo CD presets on the M4
+config layer.
 
 ## Risks and mitigations
 
