@@ -58,6 +58,23 @@ func (f *fakeGetter) Get(_ context.Context, res k8s.Resource, ns, name string) (
 	return f.obj, f.err
 }
 
+// fakePatcher records patches and deletes.
+type fakePatcher struct {
+	patches []string // "res/ns/name: body"
+	deletes []string
+	err     error
+}
+
+func (f *fakePatcher) Patch(_ context.Context, res k8s.Resource, ns, name string, patch []byte) (*unstructured.Unstructured, error) {
+	f.patches = append(f.patches, res.Name()+"/"+ns+"/"+name+": "+string(patch))
+	return &unstructured.Unstructured{}, f.err
+}
+
+func (f *fakePatcher) Delete(_ context.Context, res k8s.Resource, ns, name string, _ *int64) error {
+	f.deletes = append(f.deletes, res.Name()+"/"+ns+"/"+name)
+	return f.err
+}
+
 // rv asserts the top view is a table view.
 func rv(m Model) *resourceView { return m.top().(*resourceView) }
 
@@ -81,6 +98,7 @@ func newTestFull(t *testing.T) (Model, *fakeStreamer, *fakeGetter) {
 		Resource:  k8s.Pods,
 		streamer:  fs,
 		getter:    fg,
+		patcher:   &fakePatcher{},
 		contexts:  []string{"test-ctx", "other-ctx"},
 	})
 	// Init returns a batch; run the stream start directly instead so tests
@@ -741,7 +759,7 @@ func TestHelpOverlay(t *testing.T) {
 		t.Fatal("? should open help")
 	}
 	out := stripANSI(m.View().Content)
-	for _, want := range []string{"Global", "command palette", "Table", "sort by column", "cycle columns", "Move", "Palette / filter", "press ? or esc to close"} {
+	for _, want := range []string{"Global", "command palette", "Table", "sort by column", "cycle columns", "Move", "Palette / filter", "? or esc closes help"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help missing %q:\n%s", want, out)
 		}
@@ -809,5 +827,122 @@ func TestPaletteQuitAndHelpActions(t *testing.T) {
 	m, _ = press(m, "enter")
 	if !m.showHelp {
 		t.Error("help action should open the overlay")
+	}
+}
+
+func fp(m Model) *fakePatcher { return m.deps.patch.(*fakePatcher) }
+
+// runResult executes an action cmd and feeds its result back.
+func runResult(m Model, cmd tea.Cmd) Model {
+	if cmd == nil {
+		return m
+	}
+	mm, _ := m.Update(cmd())
+	return mm.(Model)
+}
+
+func TestRestartActionOnDeployment(t *testing.T) {
+	m, _ := newTest(t)
+	// Pods do not offer restart.
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "r")
+	if cmd != nil || len(fp(m).patches) != 0 {
+		t.Fatal("r on a pod must not patch anything")
+	}
+	// Switch to deployments and restart the selected one.
+	m, _ = press(m, ":")
+	m = typeStr(m, "deploy")
+	m, _ = press(m, "enter")
+	m = feed(m, k8s.Update{Snapshot: k8s.Snapshot{
+		Columns: []k8s.Column{{Name: "NAME"}},
+		Rows:    []k8s.Row{{Name: "web", Namespace: "default", UID: "w", Cells: []string{"web"}}},
+	}, Status: k8s.StatusLive})
+	m, cmd = press(m, "r")
+	if cmd == nil {
+		t.Fatal("r on a deployment should run restart")
+	}
+	m = runResult(m, cmd)
+	if len(fp(m).patches) != 1 || !strings.HasPrefix(fp(m).patches[0], "deployments/default/web: ") {
+		t.Fatalf("patches = %v", fp(m).patches)
+	}
+	if !strings.Contains(fp(m).patches[0], `"kubectl.kubernetes.io/restartedAt":"`) {
+		t.Errorf("restart patch body wrong: %s", fp(m).patches[0])
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "rollout restart: Deployment default/web") {
+		t.Errorf("notice missing:\n%s", stripANSI(m.View().Content))
+	}
+	// Notice clears on its tick.
+	mm, _ := m.Update(clearNoticeMsg{seq: m.noticeSeq})
+	m = mm.(Model)
+	if m.notice != "" {
+		t.Error("notice should clear")
+	}
+}
+
+func TestDeleteConfirms(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "down") // b
+	m, cmd := press(m, "ctrl+d")
+	if cmd != nil || m.confirm == nil {
+		t.Fatal("delete should ask for confirmation first")
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "delete object?") || !strings.Contains(out, "Pod default/b") {
+		t.Errorf("confirm dialog missing:\n%s", out)
+	}
+	m, cmd = press(m, "n")
+	if m.confirm != nil || cmd != nil || len(fp(m).deletes) != 0 {
+		t.Fatal("n should cancel")
+	}
+	m, _ = press(m, "ctrl+d")
+	m, cmd = press(m, "y")
+	if cmd == nil {
+		t.Fatal("y should run the delete")
+	}
+	m = runResult(m, cmd)
+	if len(fp(m).deletes) != 1 || fp(m).deletes[0] != "pods/default/b" {
+		t.Errorf("deletes = %v", fp(m).deletes)
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "deleted Pod default/b") {
+		t.Error("notice missing after delete")
+	}
+}
+
+func TestActionErrorShown(t *testing.T) {
+	m, _ := newTest(t)
+	fp(m).err = errors.New("pods \"b\" is forbidden")
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "ctrl+d")
+	m, cmd := press(m, "y")
+	m = runResult(m, cmd)
+	if !strings.Contains(stripANSI(m.View().Content), "forbidden") {
+		t.Error("action error should show in the status bar")
+	}
+	m, _ = press(m, "j")
+	if m.err != nil {
+		t.Error("next key should clear the error")
+	}
+}
+
+func TestPaletteListsActionsForSelection(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	if it, ok := m.palette.selected(); !ok || it.Kind != itemAction || it.Label != "delete" {
+		t.Fatalf("first palette item should be the delete action for the row, got %+v", it)
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "delete object · a") {
+		t.Error("action detail should name the row")
+	}
+	m = typeStr(m, "restart")
+	if _, ok := m.palette.selected(); ok {
+		t.Error("restart should not be offered for pods")
+	}
+	m, _ = press(m, "esc")
+	// Help lists the applicable actions.
+	m, _ = press(m, "?")
+	if !strings.Contains(stripANSI(m.View().Content), "Actions on Pod") {
+		t.Error("help should list actions for the resource")
 	}
 }

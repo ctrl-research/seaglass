@@ -18,13 +18,13 @@ var (
 	helpTitleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	helpKeyStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
 	helpDescStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	helpFootStyle  = lipgloss.NewStyle().Faint(true)
 )
 
 // RenderHelp lays sections out in columns that fit the width, each column
-// about 40 cells, and pads to height.
+// about 34 cells, and pads to height. The close hint lives in the status
+// bar.
 func RenderHelp(sections []HelpSection, width, height int) string {
-	const colW = 40
+	const colW = 34
 	ncols := max(1, min(len(sections), (width-2)/colW))
 	cols := make([][]string, ncols)
 	for i, s := range sections {
@@ -35,8 +35,7 @@ func RenderHelp(sections []HelpSection, width, height int) string {
 		blocks[i] = lipgloss.NewStyle().Width(colW).Render(strings.Join(lines, "\n"))
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, blocks...)
-	foot := helpFootStyle.Render("press ? or esc to close")
-	out := lipgloss.NewStyle().Padding(1, 2).Render(body + "\n" + foot)
+	out := lipgloss.NewStyle().Padding(1, 2).Render(body)
 	return lipgloss.NewStyle().Height(height).MaxHeight(height).MaxWidth(width).Render(out)
 }
 

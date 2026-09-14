@@ -13,7 +13,7 @@ func TestRenderHelp(t *testing.T) {
 		{"Table", []key.Binding{key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter rows"))}},
 	}
 	out := stripANSI(RenderHelp(secs, 100, 20))
-	for _, want := range []string{"Global", "q  quit", "?  keys", "Table", "/  filter rows", "press ? or esc to close"} {
+	for _, want := range []string{"Global", "q  quit", "?  keys", "Table", "/  filter rows"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help missing %q:\n%s", want, out)
 		}

@@ -17,6 +17,8 @@ type StatusBar struct {
 	Count string
 	State string
 	Err   string
+	// Notice is a transient success message, shown in place of the hint.
+	Notice string
 	// Hint is key help shown on the right when there is room and no error.
 	Hint string
 	// Back names where esc goes, e.g. "esc back to pods". Kept longer than
@@ -53,6 +55,8 @@ func (s StatusBar) Render(width int) string {
 	switch {
 	case s.Err != "":
 		right = errStyle.Render(truncate(s.Err, width/2))
+	case s.Notice != "":
+		right = liveStyle.Render(truncate(s.Notice, width/2))
 	case s.State == "live":
 		right = barStyle.Render(count) + liveStyle.Render("● live")
 	default:
@@ -63,7 +67,7 @@ func (s StatusBar) Render(width int) string {
 	fits := func(extra string) bool {
 		return width-lipgloss.Width(left)-lipgloss.Width(extra)-lipgloss.Width(right)-2 >= 1
 	}
-	if s.Err == "" {
+	if s.Err == "" && s.Notice == "" {
 		back, hint := "", ""
 		if s.Back != "" {
 			back = sepStyle.Render(s.Back + "  ")

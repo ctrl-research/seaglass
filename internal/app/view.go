@@ -30,6 +30,7 @@ func (s clientStreamer) Stream(ctx context.Context, res k8s.Resource, ns string)
 type deps struct {
 	stream streamer
 	get    getter
+	patch  patcher
 }
 
 // viewStatus is what a view contributes to the status bar.
