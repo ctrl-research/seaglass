@@ -164,9 +164,15 @@ func TestPaletteResourcePushAndPop(t *testing.T) {
 	if got := fs.calls[len(fs.calls)-1]; got != "deployments/default" {
 		t.Errorf("stream started for %q", got)
 	}
-	out := m.View().Content
-	if !strings.Contains(out, "pods") || !strings.Contains(out, "deployments") {
-		t.Errorf("breadcrumbs missing:\n%s", out)
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "test-ctx › default › deployments") {
+		t.Errorf("breadcrumbs should show scope only:\n%s", out)
+	}
+	if strings.Contains(out, "pods › deployments") {
+		t.Errorf("breadcrumbs must not show view history:\n%s", out)
+	}
+	if !strings.Contains(out, "esc back to pods") {
+		t.Errorf("hint should name the previous view:\n%s", out)
 	}
 
 	m, _ = press(m, "esc")

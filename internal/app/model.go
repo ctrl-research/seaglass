@@ -320,17 +320,20 @@ func (m Model) View() tea.View {
 	}
 	top := m.top()
 
-	crumbs := make([]string, len(m.stack))
-	for i, sv := range m.stack {
-		crumbs[i] = sv.res.Name()
+	// Breadcrumbs describe scope, large to small: context › namespace ›
+	// resource. The view stack is history, not scope, so it is not shown;
+	// the hint names where esc goes instead.
+	hint := ": palette  / filter  q quit"
+	if len(m.stack) > 1 {
+		hint = ": palette  / filter  esc back to " + m.stack[len(m.stack)-2].res.Name() + "  q quit"
 	}
 	bar := ui.StatusBar{
 		Namespace: m.namespace,
-		Crumbs:    crumbs,
+		Crumbs:    []string{top.res.Name()},
 		Rows:      len(top.filtered),
 		Total:     len(top.snapshot.Rows),
 		State:     top.status.String(),
-		Hint:      ": palette  / filter  esc back  q quit",
+		Hint:      hint,
 	}
 	if m.client != nil {
 		bar.Context = m.client.Context
