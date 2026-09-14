@@ -291,7 +291,7 @@ func (v *resourceView) hint() string {
 func (v *resourceView) help() []helpSection {
 	km := v.table.KeyMap
 	return []helpSection{
-		{"Table", []key.Binding{keys.Filter, keys.Sort, keys.Reverse, keys.Columns, keys.Detail, keys.YAML}},
+		{"Table", []key.Binding{keys.Filter, keys.Sort, keys.Reverse, keys.Columns, keys.Detail, keys.YAML, keys.Logs, keys.Shell}},
 		{"Move", []key.Binding{km.LineUp, km.LineDown, km.PageUp, km.PageDown, km.HalfPageUp, km.HalfPageDown, km.GotoTop, km.GotoBottom}},
 	}
 }

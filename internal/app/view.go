@@ -32,6 +32,19 @@ type deps struct {
 	get    getter
 	patch  patcher
 	logs   logger
+	exec   execer
+}
+
+// execer builds an interactive shell command for a container.
+type execer interface {
+	Shell(namespace, pod, container string, command []string) tea.ExecCommand
+}
+
+// clientExecer adapts k8s.Client to execer.
+type clientExecer struct{ c *k8s.Client }
+
+func (e clientExecer) Shell(ns, pod, container string, command []string) tea.ExecCommand {
+	return e.c.Shell(ns, pod, container, command)
 }
 
 // viewStatus is what a view contributes to the status bar.

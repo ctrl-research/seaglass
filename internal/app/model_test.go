@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -98,6 +99,21 @@ func (f *fakeLogger) Logs(ctx context.Context, ns, pod, container string, opts k
 	return ch, nil
 }
 
+// fakeExecer records shell requests and returns a no-op command.
+type fakeExecer struct{ calls []string }
+
+type noopExec struct{}
+
+func (noopExec) Run() error          { return nil }
+func (noopExec) SetStdin(io.Reader)  {}
+func (noopExec) SetStdout(io.Writer) {}
+func (noopExec) SetStderr(io.Writer) {}
+
+func (f *fakeExecer) Shell(ns, pod, container string, _ []string) tea.ExecCommand {
+	f.calls = append(f.calls, ns+"/"+pod+"/"+container)
+	return noopExec{}
+}
+
 // rv asserts the top view is a table view.
 func rv(m Model) *resourceView { return m.top().(*resourceView) }
 
@@ -125,6 +141,7 @@ func newTestFull(t *testing.T) (Model, *fakeStreamer, *fakeGetter) {
 		getter:    fg,
 		patcher:   &fakePatcher{},
 		logger:    &fakeLogger{},
+		execer:    &fakeExecer{},
 		contexts:  []string{"test-ctx", "other-ctx"},
 	})
 	// Init returns a batch; run the stream start directly instead so tests
@@ -1319,5 +1336,94 @@ func TestLogsOnNonPodIsANotice(t *testing.T) {
 	}
 	if !strings.Contains(stripANSI(m.View().Content), "logs open from a pod") {
 		t.Error("notice missing")
+	}
+}
+
+func fe(m Model) *fakeExecer { return m.deps.exec.(*fakeExecer) }
+
+func TestShellPicksContainerThenExecs(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "down") // b, which has app and sidecar
+	m, cmd := press(m, "x")
+	if cmd == nil {
+		t.Fatal("x should fetch containers")
+	}
+	mm, cmd := m.Update(cmd())
+	m = mm.(Model)
+	if !m.palette.open || m.execTarget == nil {
+		t.Fatal("two containers should open a picker")
+	}
+	if it, ok := m.palette.selected(); !ok || it.Kind != itemExec || it.Label != "app" {
+		t.Fatalf("first pick = %+v", it)
+	}
+	m = typeStr(m, "side")
+	m, cmd = press(m, "enter")
+	if cmd == nil || m.execTarget != nil {
+		t.Fatal("choosing a container should start the shell")
+	}
+	// The command is a tea.Exec; run it to get the callback message.
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if c != nil {
+				if em, ok := c().(execDoneMsg); ok {
+					msg = em
+				}
+			}
+		}
+	}
+	if len(fe(m).calls) != 1 || fe(m).calls[0] != "default/b/sidecar" {
+		t.Errorf("shell calls = %v", fe(m).calls)
+	}
+	mm, _ = m.Update(execDoneMsg{tgt: target{res: k8s.Pods, namespace: "default", name: "b"}, container: "sidecar"})
+	m = mm.(Model)
+	if !strings.Contains(stripANSI(m.View().Content), "shell closed: Pod default/b [sidecar]") {
+		t.Error("notice after shell missing")
+	}
+	_ = msg
+}
+
+func TestShellSingleContainerSkipsPicker(t *testing.T) {
+	m, _, fg := newTestFull(t)
+	fg.obj.Object["spec"] = map[string]any{"containers": []any{map[string]any{"name": "only"}}}
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "x")
+	mm, cmd := m.Update(cmd())
+	m = mm.(Model)
+	if m.palette.open || cmd == nil {
+		t.Fatal("one container should exec directly")
+	}
+	if len(fe(m).calls) != 1 || fe(m).calls[0] != "default/a/only" {
+		t.Errorf("shell calls = %v", fe(m).calls)
+	}
+}
+
+func TestShellPickerEscCancels(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "x")
+	mm, _ := m.Update(cmd())
+	m = mm.(Model)
+	m, _ = press(m, "esc")
+	if m.palette.open || m.execTarget != nil || len(fe(m).calls) != 0 {
+		t.Error("esc should cancel the shell picker")
+	}
+}
+
+func TestShellOnNonPodIsANotice(t *testing.T) {
+	m := onDeployments(t)
+	m, _ = press(m, "x")
+	if !strings.Contains(stripANSI(m.View().Content), "shell opens from a pod") || len(fe(m).calls) != 0 {
+		t.Error("x on a deployment should only notify")
+	}
+}
+
+func TestShellErrorShown(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	mm, _ := m.Update(execDoneMsg{tgt: target{res: k8s.Pods, namespace: "default", name: "a"}, container: "c", err: errors.New("executable file not found")})
+	m = mm.(Model)
+	if !strings.Contains(stripANSI(m.View().Content), "executable file not found") {
+		t.Error("exec error should show")
 	}
 }

@@ -24,6 +24,7 @@ const (
 	itemAction
 	itemContainer
 	itemSince
+	itemExec
 )
 
 func (k itemKind) String() string {
@@ -40,6 +41,8 @@ func (k itemKind) String() string {
 		return "container"
 	case itemSince:
 		return "since"
+	case itemExec:
+		return "shell"
 	default:
 		return "context"
 	}
@@ -328,6 +331,15 @@ func sinceItems(current time.Duration) []paletteItem {
 			detail += " · current"
 		}
 		items = append(items, paletteItem{Kind: itemSince, Label: c.label, Detail: detail, Since: c.d, search: strings.ToLower(c.label + " since " + detail)})
+	}
+	return items
+}
+
+// execItems builds the container picker for a shell.
+func execItems(containers []string) []paletteItem {
+	items := make([]paletteItem, 0, len(containers))
+	for _, c := range containers {
+		items = append(items, paletteItem{Kind: itemExec, Label: c, Detail: "open a shell in this container", Name: c, search: strings.ToLower(c + " shell exec")})
 	}
 	return items
 }
