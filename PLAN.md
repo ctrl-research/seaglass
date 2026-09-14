@@ -127,10 +127,10 @@ Gate: I can open it against production and see pods update live.
   Object views fetch once; `r` reloads. Live single-object watch later.
 - [x] Column sort via a picker on `s` (natural order: ages, counts, text),
   `S` reverses, arrow in the header. `w` cycles auto/wide/narrow columns.
-- [x] Header: small ASCII logo at the top left, context/namespace/cluster
-  info beside it, separated from the table by a single horizontal rule.
-  Like k9s but shorter and without borders. Must collapse to one line or
-  disappear on short terminals.
+- [x] Header: six-line ASCII wordmark top left, six info fields beside it,
+  a single horizontal rule beneath, no borders. Hidden below 22 rows or
+  60 columns; fields drop before the logo when narrow; the help overlay
+  reclaims the space.
 - [x] Generated help overlay (`?`) from the keymap. All handlers match on
   `key.Binding`s in one keymap, so help cannot drift and M5 can override.
 - [x] Persist last context/namespace/resource between runs (state.json in
@@ -150,7 +150,8 @@ edit need bespoke code. This avoids writing the actions twice.
   appear in the palette for the selected row and in help.
 - [x] Rollout restart (`r`) as a patch action on Deployments,
   StatefulSets, DaemonSets.
-- [x] Delete with confirm dialog (`ctrl+d`). Force/grace options later.
+- [x] Delete with confirm dialog (`ctrl+d`) and an `f` force toggle (grace 0).
+  Every state-changing action confirms; config may opt out per action.
 - [x] Scale for Deployments/StatefulSets/ReplicaSets via a generic prompt
   line (`=`, prefilled from the table's Ready/Desired cell) and `+`/`-`.
 - [x] Logs (`l`): follow with pause on scroll, containers merged by server

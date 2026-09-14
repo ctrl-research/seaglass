@@ -13,11 +13,25 @@ var (
 	confirmYes   = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
 )
 
+// Toggle is an optional switch shown in a confirm dialog.
+type Toggle struct {
+	Key   string // key that flips it
+	Label string
+	On    bool
+}
+
 // Confirm renders a centered yes/no dialog over a blank body of the given
 // size. The caller hides the underlying view while it is shown.
-func Confirm(title, detail string, width, height int) string {
-	body := confirmTitle.Render(title) + "\n" + detail + "\n\n" +
-		confirmYes.Render("y") + confirmKeys.Render(" confirm    ") + lipgloss.NewStyle().Bold(true).Render("n") + confirmKeys.Render("/esc cancel")
+func Confirm(title, detail string, toggles []Toggle, width, height int) string {
+	body := confirmTitle.Render(title) + "\n" + detail + "\n"
+	for _, t := range toggles {
+		state := confirmKeys.Render("off")
+		if t.On {
+			state = confirmYes.Render("ON")
+		}
+		body += "\n" + lipgloss.NewStyle().Bold(true).Render(t.Key) + confirmKeys.Render(" "+t.Label+": ") + state
+	}
+	body += "\n\n" + confirmYes.Render("y") + confirmKeys.Render(" confirm    ") + lipgloss.NewStyle().Bold(true).Render("n") + confirmKeys.Render("/esc cancel")
 	box := confirmBox.Render(body)
 	if lipgloss.Width(box) > width {
 		box = lipgloss.NewStyle().MaxWidth(width).Render(box)

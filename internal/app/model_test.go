@@ -72,8 +72,12 @@ func (f *fakePatcher) Patch(_ context.Context, res k8s.Resource, ns, name string
 	return &unstructured.Unstructured{}, f.err
 }
 
-func (f *fakePatcher) Delete(_ context.Context, res k8s.Resource, ns, name string, _ *int64) error {
-	f.deletes = append(f.deletes, res.Name()+"/"+ns+"/"+name)
+func (f *fakePatcher) Delete(_ context.Context, res k8s.Resource, ns, name string, grace *int64) error {
+	entry := res.Name() + "/" + ns + "/" + name
+	if grace != nil {
+		entry += fmt.Sprintf(" grace=%d", *grace)
+	}
+	f.deletes = append(f.deletes, entry)
 	return f.err
 }
 
@@ -588,7 +592,7 @@ func TestHeaderShownAndHidden(t *testing.T) {
 	m = mm.(Model)
 	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
 	out := stripANSI(m.View().Content)
-	for _, want := range []string{"┌─┐┌─┐", "context: test-ctx", "namespace: default", "k8s: v1.30.0", "────"} {
+	for _, want := range []string{"/ ___|  ___", "context: test-ctx", "namespace: default", "k8s: v1.30.0", "────"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("header missing %q:\n%s", want, out)
 		}
@@ -604,7 +608,7 @@ func TestHeaderShownAndHidden(t *testing.T) {
 	mm, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
 	m = mm.(Model)
 	out = stripANSI(m.View().Content)
-	if strings.Contains(out, "┌─┐") {
+	if strings.Contains(out, "|___/") {
 		t.Error("header should hide on a short terminal")
 	}
 	if lines := strings.Count(out, "\n") + 1; lines != 12 {
@@ -880,8 +884,15 @@ func TestRestartActionOnDeployment(t *testing.T) {
 		Rows:    []k8s.Row{{Name: "web", Namespace: "default", UID: "w", Cells: []string{"web"}}},
 	}, Status: k8s.StatusLive})
 	m, cmd = press(m, "r")
+	if cmd != nil || m.confirm == nil {
+		t.Fatal("r on a deployment should ask for confirmation")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "rollout restart Deployment default/web?") {
+		t.Errorf("confirm text:\n%s", stripANSI(m.View().Content))
+	}
+	m, cmd = press(m, "y")
 	if cmd == nil {
-		t.Fatal("r on a deployment should run restart")
+		t.Fatal("y should run restart")
 	}
 	m = runResult(m, cmd)
 	if len(fp(m).patches) != 1 || !strings.HasPrefix(fp(m).patches[0], "deployments/default/web: ") {
@@ -910,7 +921,7 @@ func TestDeleteConfirms(t *testing.T) {
 		t.Fatal("delete should ask for confirmation first")
 	}
 	out := stripANSI(m.View().Content)
-	if !strings.Contains(out, "delete object?") || !strings.Contains(out, "Pod default/b") {
+	if !strings.Contains(out, "delete object Pod default/b?") {
 		t.Errorf("confirm dialog missing:\n%s", out)
 	}
 	m, cmd = press(m, "n")
@@ -918,16 +929,41 @@ func TestDeleteConfirms(t *testing.T) {
 		t.Fatal("n should cancel")
 	}
 	m, _ = press(m, "ctrl+d")
+	out = stripANSI(m.View().Content)
+	if !strings.Contains(out, "f force (grace period 0): off") {
+		t.Errorf("force toggle missing:\n%s", out)
+	}
+	m, _ = press(m, "f")
+	if !m.confirm.force || !strings.Contains(stripANSI(m.View().Content), "force (grace period 0): ON") {
+		t.Error("f should turn force on")
+	}
+	m, _ = press(m, "f")
+	if m.confirm.force {
+		t.Error("f again should turn force off")
+	}
+	m, _ = press(m, "f")
 	m, cmd = press(m, "y")
 	if cmd == nil {
 		t.Fatal("y should run the delete")
 	}
 	m = runResult(m, cmd)
-	if len(fp(m).deletes) != 1 || fp(m).deletes[0] != "pods/default/b" {
+	if len(fp(m).deletes) != 1 || fp(m).deletes[0] != "pods/default/b grace=0" {
 		t.Errorf("deletes = %v", fp(m).deletes)
 	}
-	if !strings.Contains(stripANSI(m.View().Content), "deleted Pod default/b") {
+	if !strings.Contains(stripANSI(m.View().Content), "force deleted Pod default/b") {
 		t.Error("notice missing after delete")
+	}
+}
+
+func TestRestartHasNoForceToggle(t *testing.T) {
+	m := onDeployments(t)
+	m, _ = press(m, "r")
+	if strings.Contains(stripANSI(m.View().Content), "force") {
+		t.Error("restart should not offer force")
+	}
+	m, _ = press(m, "f") // ignored
+	if m.confirm == nil || m.confirm.force {
+		t.Error("f must be ignored when the action has no force option")
 	}
 }
 
@@ -1009,9 +1045,16 @@ func TestScalePromptDefaultsAndPatches(t *testing.T) {
 	mm, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	m = mm.(Model)
 	m = typeStr(m, "5")
-	m, cmd = press(m, "enter")
-	if m.prompt.open || cmd == nil {
-		t.Fatal("valid input should close the prompt and run")
+	m, _ = press(m, "enter")
+	if m.prompt.open || m.confirm == nil {
+		t.Fatal("valid input should close the prompt and ask for confirmation")
+	}
+	if out := stripANSI(m.View().Content); !strings.Contains(out, "scale Deployment default/web to 5 replicas?") {
+		t.Errorf("confirm text:\n%s", out)
+	}
+	m, cmd = press(m, "y")
+	if cmd == nil {
+		t.Fatal("y should run the scale")
 	}
 	execCmdInto(&m, cmd)
 	if len(fp(m).patches) != 1 || !strings.HasSuffix(fp(m).patches[0], `{"spec":{"replicas":5}}`) {
@@ -1024,9 +1067,11 @@ func TestScalePromptDefaultsAndPatches(t *testing.T) {
 
 func TestScaleUpDownFromTable(t *testing.T) {
 	m := onDeployments(t)
-	m, cmd := press(m, "+")
+	m, _ = press(m, "+")
+	m, cmd := press(m, "y")
 	execCmdInto(&m, cmd)
-	m, cmd = press(m, "-")
+	m, _ = press(m, "-")
+	m, cmd = press(m, "y")
 	execCmdInto(&m, cmd)
 	if len(fp(m).patches) != 2 || !strings.HasSuffix(fp(m).patches[0], `{"spec":{"replicas":4}}`) || !strings.HasSuffix(fp(m).patches[1], `{"spec":{"replicas":2}}`) {
 		t.Errorf("patches = %v", fp(m).patches)
@@ -1036,7 +1081,8 @@ func TestScaleUpDownFromTable(t *testing.T) {
 	sn.Columns = []k8s.Column{{Name: "Name"}}
 	sn.Rows[0].Cells = []string{"web"}
 	m = feed(m, k8s.Update{Snapshot: sn, Status: k8s.StatusLive})
-	m, cmd = press(m, "+")
+	m, _ = press(m, "+")
+	m, cmd = press(m, "y")
 	execCmdInto(&m, cmd)
 	if m.err == nil || !strings.Contains(m.err.Error(), "desired replicas") {
 		t.Errorf("expected a readable error, got %v", m.err)
