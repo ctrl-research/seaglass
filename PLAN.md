@@ -145,16 +145,22 @@ actions on it: rollout restart is an annotation patch, scale and suspend
 are field patches, delete is a verb. Only exec, logs, port-forward, and
 edit need bespoke code. This avoids writing the actions twice.
 
-- Logs (`l`): follow, container picker or merged multi-container view,
+- [x] Action engine: match rule, key, merge patch from field paths or a
+  delete verb, optional confirm, result as a status bar notice. Actions
+  appear in the palette for the selected row and in help.
+- [x] Rollout restart (`r`) as a patch action on Deployments,
+  StatefulSets, DaemonSets.
+- [x] Delete with confirm dialog (`ctrl+d`). Force/grace options later.
+- [ ] Scale for Deployments/StatefulSets/ReplicaSets: first action that
+  needs an input prompt.
+- [ ] Logs (`l`): follow, container picker or merged multi-container view,
   `--since`, timestamps toggle, regex filter, wrap toggle, save to file.
-- Exec shell into a container (`s`) via `tea.ExecProcess`.
-- Delete with confirm dialog (`ctrl+d`), with force/grace options.
-- Scale (`shift+s`) for Deployments/StatefulSets/ReplicaSets.
-- Rollout restart (`r`) and rollout status inline.
-- Edit in `$EDITOR` (`e`) with server-side apply and a diff-on-conflict
+- [ ] Exec shell into a container via `tea.ExecProcess`.
+- [ ] Edit in `$EDITOR` (`e`) with server-side apply and a diff-on-conflict
   message.
-- Port-forward (`shift+f`) with an active-forwards panel and cancel.
-- Copy resource name / namespace / kubectl command to clipboard.
+- [ ] Port-forward with an active-forwards panel and cancel.
+- [ ] Copy resource name / namespace / kubectl command to clipboard.
+- [ ] Rollout status inline.
 
 Gate: k9s is uninstalled.
 

@@ -139,6 +139,18 @@ func (p *palette) show() tea.Cmd {
 	return p.showWith(p.base, palettePlaceholder)
 }
 
+// showExtra opens the palette with contextual items (e.g. actions for the
+// selected row) listed before the global ones.
+func (p *palette) showExtra(extra []paletteItem) tea.Cmd {
+	if len(extra) == 0 {
+		return p.show()
+	}
+	items := make([]paletteItem, 0, len(extra)+len(p.base))
+	items = append(items, extra...)
+	items = append(items, p.base...)
+	return p.showWith(items, palettePlaceholder)
+}
+
 // showWith opens the palette over a temporary item set, e.g. sort columns.
 // hide restores the global set.
 func (p *palette) showWith(items []paletteItem, placeholder string) tea.Cmd {

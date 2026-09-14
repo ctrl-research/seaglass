@@ -6,8 +6,10 @@ package app
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -31,9 +33,10 @@ type Options struct {
 	// State persists the last context, namespace, and resource. Optional.
 	State stateStore
 
-	// streamer and getter override the client for tests.
+	// streamer, getter, and patcher override the client for tests.
 	streamer streamer
 	getter   getter
+	patcher  patcher
 	// contexts overrides kubeconfig context discovery for tests.
 	contexts []string
 }
@@ -56,6 +59,9 @@ type Model struct {
 	connecting string // context name while switching, "" otherwise
 	err        error
 	showHelp   bool
+	confirm    *pendingAction
+	notice     string
+	noticeSeq  int
 
 	version       string // seaglass version
 	serverVersion string // fetched from /version
@@ -88,13 +94,14 @@ type (
 		version string
 		err     error
 	}
+	clearNoticeMsg struct{ seq int }
 )
 
 // New builds the root model. Streaming starts in Init.
 func New(opts Options) Model {
 	m := Model{
 		client:    opts.Client,
-		deps:      deps{stream: opts.streamer, get: opts.getter},
+		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher},
 		namespace: opts.Namespace,
 		palette:   newPalette(),
 		contexts:  opts.contexts,
@@ -106,6 +113,9 @@ func New(opts Options) Model {
 	}
 	if m.deps.get == nil && opts.Client != nil {
 		m.deps.get = opts.Client
+	}
+	if m.deps.patch == nil && opts.Client != nil {
+		m.deps.patch = opts.Client
 	}
 	m.pushResource(opts.Resource)
 	return m
@@ -318,6 +328,19 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.serverVersion = msg.version
 		}
 		return m, nil
+
+	case actionResultMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		return m, m.setNotice(msg.summary)
+
+	case clearNoticeMsg:
+		if msg.seq == m.noticeSeq {
+			m.notice = ""
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -330,6 +353,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.confirm != nil {
+		switch msg.String() {
+		case "y", "Y":
+			p := *m.confirm
+			m.confirm = nil
+			return m, runAction(m.deps.patch, p.act, p.tgt, p.row)
+		case "n", "N", "esc", "q", "ctrl+c":
+			m.confirm = nil
+		}
+		return m, nil
+	}
+	m.err = nil
 	if m.palette.open {
 		chosen, closed, cmd := m.palette.update(msg)
 		if closed {
@@ -354,7 +389,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case is(msg, keys.Palette):
-		cmd := m.palette.show()
+		var extra []paletteItem
+		if rv, ok := top.(*resourceView); ok {
+			if row, ok := rv.selectedRow(); ok {
+				extra = actionItems(rv.res, row)
+			}
+		}
+		cmd := m.palette.showExtra(extra)
 		top.resize(m.width, m.bodyHeight())
 		return m, cmd
 	case is(msg, keys.Help):
@@ -362,8 +403,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Drill into the selected row of a table view.
+	// Actions and drill-down on the selected row of a table view.
 	if rv, ok := top.(*resourceView); ok {
+		for _, a := range actionsFor(rv.res) {
+			if is(msg, a.Key) {
+				return m, m.trigger(a, rv)
+			}
+		}
 		switch {
 		case is(msg, keys.Sort):
 			if len(rv.snapshot.Columns) == 0 {
@@ -408,10 +454,46 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// trigger runs an action on the table's selected row, via a confirm dialog
+// when the action asks for one.
+func (m *Model) trigger(a action, rv *resourceView) tea.Cmd {
+	row, ok := rv.selectedRow()
+	if !ok {
+		return nil
+	}
+	ns := row.Namespace
+	if ns == "" {
+		ns = rv.namespace
+	}
+	tgt := target{res: rv.res, namespace: ns, name: row.Name}
+	if a.Confirm {
+		m.confirm = &pendingAction{act: a, tgt: tgt, row: row}
+		return nil
+	}
+	return runAction(m.deps.patch, a, tgt, row)
+}
+
+// setNotice shows a transient success message for a few seconds.
+func (m *Model) setNotice(text string) tea.Cmd {
+	m.notice = text
+	m.noticeSeq++
+	seq := m.noticeSeq
+	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return clearNoticeMsg{seq: seq} })
+}
+
 // helpSections assembles the overlay: global, then the top view's, then
 // the palette's.
 func (m Model) helpSections() []ui.HelpSection {
 	secs := append([]helpSection{globalHelp()}, m.top().help()...)
+	if rv, ok := m.top().(*resourceView); ok {
+		if acts := actionsFor(rv.res); len(acts) > 0 {
+			bs := make([]key.Binding, 0, len(acts))
+			for _, a := range acts {
+				bs = append(bs, a.Key)
+			}
+			secs = append(secs, helpSection{"Actions on " + rv.res.Kind, bs})
+		}
+	}
 	secs = append(secs, paletteHelp())
 	out := make([]ui.HelpSection, len(secs))
 	for i, s := range secs {
@@ -432,6 +514,14 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 			return tea.Quit
 		case actionHelp:
 			m.showHelp = true
+		default:
+			if name, ok := strings.CutPrefix(it.Name, "act:"); ok {
+				if a, found := actionByName(name); found {
+					if rv, isTable := m.top().(*resourceView); isTable {
+						return m.trigger(a, rv)
+					}
+				}
+			}
 		}
 		return nil
 	case itemSort:
@@ -499,7 +589,7 @@ func (m *Model) useClient(c *k8s.Client) tea.Cmd {
 		v.stop()
 	}
 	m.client = c
-	m.deps = deps{stream: clientStreamer{c}, get: c}
+	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c}
 	m.namespace = c.Namespace
 	m.resources, m.namespaces = nil, nil
 	m.serverVersion = ""
@@ -550,6 +640,8 @@ func (m Model) View() tea.View {
 		bar.Err = m.err.Error()
 	case st.err != nil:
 		bar.Err = st.err.Error()
+	case m.notice != "":
+		bar.Notice = m.notice
 	}
 
 	parts := []string{}
@@ -559,10 +651,15 @@ func (m Model) View() tea.View {
 	if m.palette.open {
 		parts = append(parts, m.palette.view(m.width))
 	}
-	if m.showHelp {
+	switch {
+	case m.confirm != nil:
+		bar.Hint, bar.Back = "y confirm  n cancel", ""
+		p := m.confirm
+		parts = append(parts, ui.Confirm(p.act.Desc+"?", p.tgt.String(), m.width, m.bodyHeight()))
+	case m.showHelp:
 		bar.Hint, bar.Back = "? or esc closes help", ""
 		parts = append(parts, ui.RenderHelp(m.helpSections(), m.width, m.bodyHeight()))
-	} else {
+	default:
 		parts = append(parts, top.render(m.width, m.bodyHeight()))
 	}
 	parts = append(parts, bar.Render(m.width))

@@ -38,12 +38,15 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | In detail/YAML: `y`/`d` switch, `c` copy YAML, `r` reload, `g`/`G` top/bottom |
 | `esc` | Clear the filter, close the palette, or go back one view |
 | `j`/`k`, arrows, `pgup`/`pgdn`, `g`/`G` | Move in the table |
+| `r` | Rollout restart the selected Deployment, StatefulSet, or DaemonSet |
+| `ctrl+d` | Delete the selected object, after a confirm |
 | `?` | Help overlay listing every key for the current view |
 | `q` or `ctrl+c` | Quit |
 
 Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
 `ns all` returns to all namespaces, `ctx prod` narrows to contexts. The
-palette also has `quit` (also `exit` or `:q`) and `help` actions. Choosing a resource pushes a new view;
+palette also has `quit` (also `exit` or `:q`) and `help` actions, and lists
+the actions available for the selected row at the top. Choosing a resource pushes a new view;
 choosing a namespace keeps the current resource and resets the view stack;
 choosing a context reconnects.
 
