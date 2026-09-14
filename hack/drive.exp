@@ -16,7 +16,7 @@ stty rows $rows cols $cols < $spawn_out(slave,name)
 set ::done 0
 proc pause {secs} { set ::timeout $secs; expect { timeout {} eof { set ::done 1 } } }
 pause 3
-foreach k $keys { if {$::done} break; send [subst -nocommands -novariables $k]; pause 1 }
+foreach k $keys { if {$::done} break; send -- [subst -nocommands -novariables $k]; pause 1 }
 if {$::done} { puts "exited cleanly" } else {
   set timeout 5
   if {[catch { expect { eof { puts "exited cleanly" } timeout { exec kill -9 $pid; puts "STUCK, killed" } } }]} { puts "exited cleanly" }

@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,10 +27,29 @@ type action struct {
 	Desc    string      // e.g. "rollout restart"
 	Key     key.Binding // may be unbound
 	Confirm bool
+	// Input, when set, prompts the user for a value before running.
+	Input *inputSpec
 	// Match decides whether the action applies to a resource type.
 	Match func(res k8s.Resource) bool
 	// Fields builds the merge patch; nil means the action is a delete.
-	Fields func(row k8s.Row, now time.Time) []k8s.Field
+	Fields func(a actionArgs) ([]k8s.Field, error)
+}
+
+// inputSpec describes the prompt for an action that needs a value.
+type inputSpec struct {
+	Label string // e.g. "replicas"
+	// Default derives the initial value from the selected row, if it can.
+	Default func(cols []k8s.Column, row k8s.Row) string
+	// Validate rejects bad input with a message.
+	Validate func(value string) error
+}
+
+// actionArgs is everything a Fields function may use.
+type actionArgs struct {
+	cols  []k8s.Column
+	row   k8s.Row
+	input string
+	now   time.Time
 }
 
 // target is a concrete object an action runs against.
@@ -51,11 +72,12 @@ type actionResultMsg struct {
 	err     error
 }
 
-// pendingAction is an action awaiting confirmation.
+// pendingAction is an action awaiting confirmation or input.
 type pendingAction struct {
-	act action
-	tgt target
-	row k8s.Row
+	act  action
+	tgt  target
+	cols []k8s.Column
+	row  k8s.Row
 }
 
 // matchKinds matches a set of group/resource pairs.
@@ -79,12 +101,50 @@ var builtinActions = []action{
 		Key:     bind("r", "rollout restart", "r"),
 		Confirm: false,
 		Match:   matchKinds("apps/deployments", "apps/statefulsets", "apps/daemonsets"),
-		Fields: func(_ k8s.Row, now time.Time) []k8s.Field {
+		Fields: func(a actionArgs) ([]k8s.Field, error) {
 			return []k8s.Field{{
 				Path:  []string{"spec", "template", "metadata", "annotations", "kubectl.kubernetes.io/restartedAt"},
-				Value: now.UTC().Format(time.RFC3339),
-			}}
+				Value: a.now.UTC().Format(time.RFC3339),
+			}}, nil
 		},
+	},
+	{
+		Name:  "scale",
+		Desc:  "scale replicas",
+		Key:   bind("=", "scale to…", "="),
+		Match: scalable,
+		Input: &inputSpec{
+			Label: "replicas",
+			Default: func(cols []k8s.Column, row k8s.Row) string {
+				n, ok := desiredReplicas(cols, row)
+				if ok {
+					return strconv.Itoa(n)
+				}
+				return ""
+			},
+			Validate: validateReplicas,
+		},
+		Fields: func(a actionArgs) ([]k8s.Field, error) {
+			n, err := strconv.Atoi(strings.TrimSpace(a.input))
+			if err != nil || n < 0 {
+				return nil, fmt.Errorf("replicas must be a non-negative integer")
+			}
+			return []k8s.Field{{Path: []string{"spec", "replicas"}, Value: n}}, nil
+		},
+	},
+	{
+		Name:   "scale up",
+		Desc:   "one more replica",
+		Key:    bind("+", "scale +1", "+"),
+		Match:  scalable,
+		Fields: scaleBy(1),
+	},
+	{
+		Name:   "scale down",
+		Desc:   "one fewer replica",
+		Key:    bind("-", "scale -1", "-"),
+		Match:  scalable,
+		Fields: scaleBy(-1),
 	},
 	{
 		Name:    "delete",
@@ -93,6 +153,52 @@ var builtinActions = []action{
 		Confirm: true,
 		Match:   func(k8s.Resource) bool { return true },
 	},
+}
+
+var scalable = matchKinds("apps/deployments", "apps/statefulsets", "apps/replicasets")
+
+func validateReplicas(v string) error {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return fmt.Errorf("replicas must be a non-negative integer")
+	}
+	return nil
+}
+
+// scaleBy patches replicas relative to the desired count read from the
+// table row.
+func scaleBy(delta int) func(actionArgs) ([]k8s.Field, error) {
+	return func(a actionArgs) ([]k8s.Field, error) {
+		cur, ok := desiredReplicas(a.cols, a.row)
+		if !ok {
+			return nil, fmt.Errorf("cannot read desired replicas from the table; use scale instead")
+		}
+		n := max(cur+delta, 0)
+		return []k8s.Field{{Path: []string{"spec", "replicas"}, Value: n}}, nil
+	}
+}
+
+// desiredReplicas reads spec.replicas as the server renders it: the
+// denominator of a Ready "x/y" cell, or a Desired cell.
+func desiredReplicas(cols []k8s.Column, row k8s.Row) (int, bool) {
+	for i, c := range cols {
+		if i >= len(row.Cells) {
+			break
+		}
+		switch strings.ToLower(c.Name) {
+		case "ready":
+			if _, den, ok := strings.Cut(row.Cells[i], "/"); ok {
+				if n, err := strconv.Atoi(den); err == nil {
+					return n, true
+				}
+			}
+		case "desired":
+			if n, err := strconv.Atoi(row.Cells[i]); err == nil {
+				return n, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // actionsFor returns the actions applicable to a resource type.
@@ -107,7 +213,7 @@ func actionsFor(res k8s.Resource) []action {
 }
 
 // runAction executes an action against a target off the UI thread.
-func runAction(p patcher, a action, tgt target, row k8s.Row) tea.Cmd {
+func runAction(p patcher, a action, tgt target, args actionArgs) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -117,14 +223,23 @@ func runAction(p patcher, a action, tgt target, row k8s.Row) tea.Cmd {
 			}
 			return actionResultMsg{summary: "deleted " + tgt.String()}
 		}
-		patch, err := k8s.MergePatch(a.Fields(row, time.Now()))
+		args.now = time.Now()
+		fields, err := a.Fields(args)
+		if err != nil {
+			return actionResultMsg{err: err}
+		}
+		patch, err := k8s.MergePatch(fields)
 		if err != nil {
 			return actionResultMsg{err: err}
 		}
 		if _, err := p.Patch(ctx, tgt.res, tgt.namespace, tgt.name, patch); err != nil {
 			return actionResultMsg{err: err}
 		}
-		return actionResultMsg{summary: a.Desc + ": " + tgt.String()}
+		summary := a.Desc + ": " + tgt.String()
+		if a.Input != nil {
+			summary = a.Name + " " + tgt.String() + " to " + strings.TrimSpace(args.input) + " " + a.Input.Label
+		}
+		return actionResultMsg{summary: summary}
 	}
 }
 
@@ -133,8 +248,12 @@ func actionItems(res k8s.Resource, row k8s.Row) []paletteItem {
 	acts := actionsFor(res)
 	items := make([]paletteItem, 0, len(acts))
 	for _, a := range acts {
+		label := a.Name
+		if a.Input != nil {
+			label += "…"
+		}
 		detail := a.Desc + " · " + strings.TrimSpace(row.Name)
-		items = append(items, paletteItem{Kind: itemAction, Label: a.Name, Detail: detail, Name: "act:" + a.Name, search: strings.ToLower(a.Name + " " + a.Desc + " action")})
+		items = append(items, paletteItem{Kind: itemAction, Label: label, Detail: detail, Name: "act:" + a.Name, search: strings.ToLower(a.Name + " " + a.Desc + " action")})
 	}
 	return items
 }
