@@ -16,11 +16,37 @@ const cellPad = 2
 // and let it truncate.
 const minColWidth = 6
 
+// ColumnMode controls which optional (priority > 0) columns show.
+type ColumnMode int
+
+const (
+	// ColumnsAuto shows optional columns while they fit.
+	ColumnsAuto ColumnMode = iota
+	// ColumnsWide shows every column, shrinking to fit.
+	ColumnsWide
+	// ColumnsNarrow shows only priority 0 columns.
+	ColumnsNarrow
+)
+
+func (m ColumnMode) String() string {
+	switch m {
+	case ColumnsWide:
+		return "wide"
+	case ColumnsNarrow:
+		return "narrow"
+	}
+	return "auto"
+}
+
+// Next cycles auto → wide → narrow → auto.
+func (m ColumnMode) Next() ColumnMode { return (m + 1) % 3 }
+
 // FitColumns chooses which server columns to show and how wide, given the
-// terminal width. Priority 0 columns are always included; higher priorities
-// are added in order while they fit. Returns the table columns and the
-// indices into the source cells that each corresponds to.
-func FitColumns(cols []k8s.Column, rows []k8s.Row, width int) ([]table.Column, []int) {
+// terminal width and mode. Priority 0 columns are always included; in auto
+// mode higher priorities are added in order while they fit. Returns the
+// table columns and the indices into the source cells that each
+// corresponds to.
+func FitColumns(cols []k8s.Column, rows []k8s.Row, width int, mode ColumnMode) ([]table.Column, []int) {
 	if len(cols) == 0 || width <= 0 {
 		return nil, nil
 	}
@@ -52,12 +78,12 @@ func FitColumns(cols []k8s.Column, rows []k8s.Row, width int) ([]table.Column, [
 			maxPri = c.Priority
 		}
 	}
-	for p := int32(1); p <= maxPri; p++ {
+	for p := int32(1); p <= maxPri && mode != ColumnsNarrow; p++ {
 		for i, c := range cols {
 			if c.Priority != p {
 				continue
 			}
-			if used+natural[i]+cellPad <= width {
+			if mode == ColumnsWide || used+natural[i]+cellPad <= width {
 				idx = append(idx, i)
 				used += natural[i] + cellPad
 			}

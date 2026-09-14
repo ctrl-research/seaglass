@@ -40,7 +40,12 @@ type resourceView struct {
 	// stays applied after enter until esc clears it.
 	filter   textinput.Model
 	typing   bool
-	filtered []k8s.Row // rows after the filter; aliases snapshot.Rows when empty
+	filtered []k8s.Row // rows after sort and filter
+
+	// Sort. sortCol is an index into snapshot.Columns, -1 for server order.
+	sortCol  int
+	sortDesc bool
+	colMode  ui.ColumnMode
 }
 
 var (
@@ -66,7 +71,29 @@ func newResourceView(id int, res k8s.Resource, ns string) *resourceView {
 		status_:   k8s.StatusConnecting,
 		table:     table.New(table.WithFocused(true), table.WithStyles(styles)),
 		filter:    fi,
+		sortCol:   -1,
 	}
+}
+
+// setSort sorts by a snapshot column; choosing the current column flips
+// the direction. -1 restores server order.
+func (v *resourceView) setSort(col int) {
+	if col == v.sortCol && col >= 0 {
+		v.sortDesc = !v.sortDesc
+	} else {
+		v.sortCol, v.sortDesc = col, false
+	}
+}
+
+// orderedRows returns snapshot rows in sort order (a copy when sorted).
+func (v *resourceView) orderedRows() []k8s.Row {
+	if v.sortCol < 0 || v.sortCol >= len(v.snapshot.Columns) {
+		return v.snapshot.Rows
+	}
+	rows := make([]k8s.Row, len(v.snapshot.Rows))
+	copy(rows, v.snapshot.Rows)
+	ui.SortRows(rows, v.sortCol, v.sortDesc)
+	return rows
 }
 
 // filterActive reports whether the filter line is shown.
@@ -85,21 +112,29 @@ func (v *resourceView) clearFilter() {
 	v.filter.Reset()
 }
 
-// applyFilter recomputes filtered from the snapshot, preserving row order.
+// refilter re-applies sort and filter, keeping the selected row.
+func (v *resourceView) refilter(width, height int) {
+	key := v.selectedKey()
+	v.applyFilter()
+	v.layout(width, height, key)
+}
+
+// applyFilter recomputes filtered from the sorted snapshot rows.
 // Rows match when every whitespace-separated term is a case-insensitive
 // substring of the row's namespace or any cell. Fuzzy matching is wrong
 // here: over a whole row, the letters of "core" appear in order in almost
 // every pod.
 func (v *resourceView) applyFilter() {
+	rows := v.orderedRows()
 	terms := strings.Fields(strings.ToLower(v.filter.Value()))
 	if len(terms) == 0 {
-		v.filtered = v.snapshot.Rows
+		v.filtered = rows
 		return
 	}
-	// Always a fresh slice: filtered aliases snapshot.Rows when unfiltered,
+	// Always a fresh slice: filtered may alias snapshot.Rows when unfiltered,
 	// so reusing its backing array would overwrite the snapshot.
-	out := make([]k8s.Row, 0, len(v.snapshot.Rows))
-	for _, r := range v.snapshot.Rows {
+	out := make([]k8s.Row, 0, len(rows))
+	for _, r := range rows {
 		hay := strings.ToLower(r.Namespace + " " + strings.Join(r.Cells, " "))
 		ok := true
 		for _, t := range terms {
@@ -170,8 +205,20 @@ func (v *resourceView) layout(width, height int, selectedKey string) {
 	if v.filtered == nil {
 		v.filtered = v.snapshot.Rows
 	}
+	// Decorate the sorted column's title before fitting so the arrow is
+	// counted in its width.
+	columns := v.snapshot.Columns
+	if v.sortCol >= 0 && v.sortCol < len(columns) {
+		columns = make([]k8s.Column, len(v.snapshot.Columns))
+		copy(columns, v.snapshot.Columns)
+		arrow := " ▲"
+		if v.sortDesc {
+			arrow = " ▼"
+		}
+		columns[v.sortCol].Name += arrow
+	}
 	// Widths come from every row so columns do not jump while typing.
-	cols, idx := ui.FitColumns(v.snapshot.Columns, v.snapshot.Rows, width)
+	cols, idx := ui.FitColumns(columns, v.snapshot.Rows, width, v.colMode)
 	v.colIdx = idx
 	v.table.SetWidth(width)
 	h := height - 1 // header
@@ -179,6 +226,9 @@ func (v *resourceView) layout(width, height int, selectedKey string) {
 		h-- // filter line
 	}
 	v.table.SetHeight(max(h, 1))
+	// Clear rows before changing columns: the table re-renders existing
+	// rows on SetColumns and panics when a new column has no cell.
+	v.table.SetRows(nil)
 	v.table.SetColumns(cols)
 	v.table.SetRows(ui.ProjectRows(v.filtered, idx))
 
@@ -226,11 +276,15 @@ func (v *resourceView) status() viewStatus {
 	if len(v.snapshot.Rows) > len(v.filtered) {
 		count = fmt.Sprintf("%d of %d rows", len(v.filtered), len(v.snapshot.Rows))
 	}
-	return viewStatus{count: count, state: v.status_.String(), err: v.err}
+	state := v.status_.String()
+	if v.colMode != ui.ColumnsAuto {
+		state = v.colMode.String() + " · " + state
+	}
+	return viewStatus{count: count, state: state, err: v.err}
 }
 
 func (v *resourceView) hint() string {
-	return ": palette  / filter  enter detail  y yaml"
+	return ": palette  / filter  s sort  w columns"
 }
 
 // handleKey handles a key. consumed is false when the key was not
@@ -240,8 +294,7 @@ func (v *resourceView) handleKey(msg tea.KeyPressMsg, width, height int) (cmd te
 		switch msg.String() {
 		case "esc":
 			v.clearFilter()
-			v.applyFilter()
-			v.layout(width, height, v.selectedKey())
+			v.refilter(width, height)
 			return nil, true
 		case "enter":
 			v.typing = false
@@ -257,8 +310,7 @@ func (v *resourceView) handleKey(msg tea.KeyPressMsg, width, height int) (cmd te
 		before := v.filter.Value()
 		v.filter, cmd = v.filter.Update(msg)
 		if v.filter.Value() != before {
-			v.applyFilter()
-			v.layout(width, height, v.selectedKey())
+			v.refilter(width, height)
 		}
 		return cmd, true
 	}
@@ -268,11 +320,20 @@ func (v *resourceView) handleKey(msg tea.KeyPressMsg, width, height int) (cmd te
 		cmd = v.startFilter()
 		v.layout(width, height, v.selectedKey())
 		return cmd, true
+	case "S":
+		if v.sortCol >= 0 {
+			v.sortDesc = !v.sortDesc
+			v.refilter(width, height)
+		}
+		return nil, true
+	case "w":
+		v.colMode = v.colMode.Next()
+		v.layout(width, height, v.selectedKey())
+		return nil, true
 	case "esc":
 		if v.filter.Value() != "" {
 			v.clearFilter()
-			v.applyFilter()
-			v.layout(width, height, v.selectedKey())
+			v.refilter(width, height)
 			return nil, true
 		}
 		return nil, false

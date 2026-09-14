@@ -166,5 +166,5 @@ func (v *objectView) status() viewStatus {
 }
 
 func (v *objectView) hint() string {
-	return "y yaml  d detail  c copy  r reload"
+	return "y yaml  d detail  c copy"
 }

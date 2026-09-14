@@ -355,6 +355,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Drill into the selected row of a table view.
 	if rv, ok := top.(*resourceView); ok {
 		switch msg.String() {
+		case "s":
+			if len(rv.snapshot.Columns) == 0 {
+				return m, nil
+			}
+			cmd := m.palette.showWith(sortItems(rv.snapshot.Columns, rv.sortCol), "sort by column")
+			rv.resize(m.width, m.bodyHeight())
+			return m, cmd
 		case "enter", "d", "y":
 			row, ok := rv.selectedRow()
 			if !ok {
@@ -394,6 +401,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // choose acts on a palette selection.
 func (m *Model) choose(it paletteItem) tea.Cmd {
 	switch it.Kind {
+	case itemSort:
+		if rv, ok := m.top().(*resourceView); ok {
+			rv.setSort(it.Index)
+			rv.refilter(m.width, m.bodyHeight())
+		}
+		return nil
 	case itemResource:
 		if _, isTable := m.top().(*resourceView); isTable && it.Resource.GVR == m.currentResource().GVR {
 			return nil
@@ -478,19 +491,21 @@ func (m Model) View() tea.View {
 	// Breadcrumbs describe scope, large to small: context › namespace ›
 	// resource › object. The view stack is history, not scope, so it is not
 	// shown; the hint names where esc goes instead.
-	hint := top.hint()
+	// Keep the hint short; the bar drops it when it does not fit, keeping
+	// the back target longer.
+	back := ""
 	if len(m.stack) > 1 {
-		back := m.stack[len(m.stack)-2].crumbs()
-		hint += "  esc back to " + back[len(back)-1]
+		c := m.stack[len(m.stack)-2].crumbs()
+		back = "esc back to " + c[len(c)-1]
 	}
-	hint += "  q quit"
 	st := top.status()
 	bar := ui.StatusBar{
 		Namespace: m.namespace,
 		Crumbs:    top.crumbs(),
 		Count:     st.count,
 		State:     st.state,
-		Hint:      hint,
+		Hint:      top.hint(),
+		Back:      back,
 	}
 	if m.client != nil {
 		bar.Context = m.client.Context

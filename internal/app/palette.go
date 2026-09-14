@@ -19,6 +19,7 @@ const (
 	itemResource itemKind = iota
 	itemNamespace
 	itemContext
+	itemSort
 )
 
 func (k itemKind) String() string {
@@ -27,6 +28,8 @@ func (k itemKind) String() string {
 		return "resource"
 	case itemNamespace:
 		return "namespace"
+	case itemSort:
+		return "column"
 	default:
 		return "context"
 	}
@@ -39,6 +42,7 @@ type paletteItem struct {
 	Detail   string
 	Resource k8s.Resource // when Kind == itemResource
 	Name     string       // namespace or context name
+	Index    int          // column index when Kind == itemSort
 	search   string
 }
 
@@ -50,12 +54,15 @@ const paletteMaxVisible = 10
 type palette struct {
 	open    bool
 	input   textinput.Model
-	items   []paletteItem
+	base    []paletteItem // the global item set
+	items   []paletteItem // what is currently shown
 	search  []string
 	matches []int
 	cursor  int
 	width   int
 }
+
+const palettePlaceholder = "resource, namespace, or context"
 
 var (
 	palInputStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
@@ -97,7 +104,15 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 	return items
 }
 
+// setItems replaces the global item set.
 func (p *palette) setItems(items []paletteItem) {
+	p.base = items
+	if !p.open {
+		p.use(items)
+	}
+}
+
+func (p *palette) use(items []paletteItem) {
 	p.items = items
 	p.search = make([]string, len(items))
 	for i, it := range items {
@@ -106,17 +121,41 @@ func (p *palette) setItems(items []paletteItem) {
 	p.filter()
 }
 
+// show opens the palette over the global items.
 func (p *palette) show() tea.Cmd {
+	return p.showWith(p.base, palettePlaceholder)
+}
+
+// showWith opens the palette over a temporary item set, e.g. sort columns.
+// hide restores the global set.
+func (p *palette) showWith(items []paletteItem, placeholder string) tea.Cmd {
 	p.open = true
 	p.input.Reset()
+	p.input.Placeholder = placeholder
 	p.cursor = 0
-	p.filter()
+	p.use(items)
 	return p.input.Focus()
 }
 
 func (p *palette) hide() {
 	p.open = false
 	p.input.Blur()
+	p.input.Placeholder = palettePlaceholder
+	p.use(p.base)
+}
+
+// sortItems builds the sort picker for a set of columns.
+func sortItems(cols []k8s.Column, current int) []paletteItem {
+	items := make([]paletteItem, 0, len(cols)+1)
+	for i, c := range cols {
+		detail := "sort by column"
+		if i == current {
+			detail = "current · choose again to reverse"
+		}
+		items = append(items, paletteItem{Kind: itemSort, Label: c.Name, Detail: detail, Index: i, search: strings.ToLower(c.Name)})
+	}
+	items = append(items, paletteItem{Kind: itemSort, Label: "server order", Detail: "namespace, then name", Index: -1, search: "server order default none"})
+	return items
 }
 
 // filter recomputes matches, ranked by score then original order.

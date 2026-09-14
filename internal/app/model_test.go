@@ -656,3 +656,79 @@ func execCmd(cmd tea.Cmd) {
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+func TestSortPickerAndReverse(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "s")
+	if !m.palette.open {
+		t.Fatal("s should open the sort picker")
+	}
+	if it, ok := m.palette.selected(); !ok || it.Kind != itemSort || it.Label != "NAME" {
+		t.Fatalf("first sort item = %+v", it)
+	}
+	m = typeStr(m, "status")
+	m, _ = press(m, "enter")
+	if rv(m).sortCol != 1 || rv(m).sortDesc {
+		t.Fatalf("sort = col %d desc %v", rv(m).sortCol, rv(m).sortDesc)
+	}
+	// Pending < Running, so b sorts first.
+	if rv(m).filtered[0].Name != "b" {
+		t.Errorf("asc by STATUS should put b first, got %s", rv(m).filtered[0].Name)
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "STATUS ▲") {
+		t.Errorf("header should mark the sorted column:\n%s", out)
+	}
+	m, _ = press(m, "S")
+	if !rv(m).sortDesc || rv(m).filtered[0].Name == "b" {
+		t.Errorf("S should reverse: desc=%v first=%s", rv(m).sortDesc, rv(m).filtered[0].Name)
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "STATUS ▼") {
+		t.Error("header should show descending arrow")
+	}
+	// Palette is back to global items after the picker closes.
+	m, _ = press(m, ":")
+	if it, _ := m.palette.selected(); it.Kind == itemSort {
+		t.Error("global palette should not show sort items")
+	}
+	m, _ = press(m, "esc")
+	// Live updates keep the sort.
+	sn := snap()
+	sn.Rows = append(sn.Rows, k8s.Row{Name: "z", UID: "9", Cells: []string{"z", "Succeeded", ""}})
+	m = feed(m, k8s.Update{Snapshot: sn, Status: k8s.StatusLive})
+	if rv(m).filtered[0].Name != "z" {
+		t.Errorf("desc by STATUS after update should put Succeeded first, got %s", rv(m).filtered[0].Name)
+	}
+	// Server order restores.
+	m, _ = press(m, "s")
+	m = typeStr(m, "server")
+	m, _ = press(m, "enter")
+	if rv(m).sortCol != -1 || rv(m).filtered[0].Name != "a" {
+		t.Errorf("server order not restored: col=%d first=%s", rv(m).sortCol, rv(m).filtered[0].Name)
+	}
+}
+
+func TestColumnModeCycle(t *testing.T) {
+	m, _ := newTest(t)
+	// NAME(4)+STATUS(7) with padding is 15; IP needs 10 more.
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 22, Height: 24})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	if strings.Contains(stripANSI(m.View().Content), "IP") {
+		t.Fatal("auto mode at width 22 should drop the IP column")
+	}
+	m, _ = press(m, "w")
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "IP") || !strings.Contains(out, "wide") {
+		t.Errorf("wide mode should force IP and say wide:\n%s", out)
+	}
+	m, _ = press(m, "w")
+	if !strings.Contains(stripANSI(m.View().Content), "narrow") {
+		t.Error("second w should be narrow")
+	}
+	m, _ = press(m, "w")
+	if rv(m).colMode != 0 {
+		t.Error("third w should return to auto")
+	}
+}

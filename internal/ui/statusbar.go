@@ -17,8 +17,11 @@ type StatusBar struct {
 	Count string
 	State string
 	Err   string
-	// Hint is shown on the right when there is no error, e.g. key help.
+	// Hint is key help shown on the right when there is room and no error.
 	Hint string
+	// Back names where esc goes, e.g. "esc back to pods". Kept longer than
+	// Hint when space is short.
+	Back string
 }
 
 var (
@@ -55,16 +58,33 @@ func (s StatusBar) Render(width int) string {
 	default:
 		right = barStyle.Render(count) + warnStyle.Render("◌ "+s.State)
 	}
-	if s.Hint != "" && s.Err == "" {
-		right = sepStyle.Render(s.Hint+"  ") + right
+	// Right side, most important last: count/state always, then Back, then
+	// Hint. Never wrap: drop Hint, then Back, then truncate the left side.
+	fits := func(extra string) bool {
+		return width-lipgloss.Width(left)-lipgloss.Width(extra)-lipgloss.Width(right)-2 >= 1
 	}
-
+	if s.Err == "" {
+		back, hint := "", ""
+		if s.Back != "" {
+			back = sepStyle.Render(s.Back + "  ")
+		}
+		if s.Hint != "" {
+			hint = sepStyle.Render(s.Hint + "  ")
+		}
+		switch {
+		case fits(hint + back):
+			right = hint + back + right
+		case fits(back):
+			right = back + right
+		}
+	}
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right) - 2
 	if gap < 1 {
+		left = truncate(left, max(width-lipgloss.Width(right)-3, 4))
 		gap = 1
 	}
 	line := " " + left + barStyle.Render(strings.Repeat(" ", gap)) + right + " "
-	return barStyle.Width(width).Render(line)
+	return barStyle.MaxWidth(width).Inline(true).Render(barStyle.Width(width).Render(line))
 }
 
 func truncate(s string, n int) string {

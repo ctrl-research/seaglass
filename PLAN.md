@@ -125,7 +125,8 @@ Gate: I can open it against production and see pods update live.
   conditions, containers) that works for every type. YAML view (`y`) with
   heuristic highlighting, managedFields stripped, `c` copies via OSC52.
   Object views fetch once; `r` reloads. Live single-object watch later.
-- [ ] Column sort (`shift+letter` or a sort picker). Wide/narrow column toggle.
+- [x] Column sort via a picker on `s` (natural order: ages, counts, text),
+  `S` reverses, arrow in the header. `w` cycles auto/wide/narrow columns.
 - [x] Header: small ASCII logo at the top left, context/namespace/cluster
   info beside it, separated from the table by a single horizontal rule.
   Like k9s but shorter and without borders. Must collapse to one line or

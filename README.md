@@ -31,6 +31,8 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | `:` or `ctrl+p` | Command palette: fuzzy search resource types, namespaces, contexts |
 | `enter` | Open the selected palette item |
 | `/` | Filter rows: every word must appear somewhere in the row; `enter` keeps it, `esc` clears |
+| `s` | Sort by a column (pick from the palette); choose the same column again or press `S` to reverse |
+| `w` | Cycle columns: auto (fit to width), wide (all), narrow (essentials) |
 | `enter` or `d` | Detail view of the selected object: metadata, status, conditions, containers |
 | `y` | YAML of the selected object, managed fields stripped |
 | In detail/YAML: `y`/`d` switch, `c` copy YAML, `r` reload, `g`/`G` top/bottom |
