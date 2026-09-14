@@ -131,7 +131,8 @@ Gate: I can open it against production and see pods update live.
   Like k9s but shorter and without borders. Must collapse to one line or
   disappear on short terminals.
 - [ ] Generated help overlay (`?`) from the keymap.
-- [ ] Persist last context/namespace/resource between runs.
+- [x] Persist last context/namespace/resource between runs (state.json in
+  the state dir; flags override).
 
 Gate: I use seaglass instead of k9s for all read-only browsing for a week.
 

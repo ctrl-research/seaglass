@@ -21,6 +21,9 @@ make run ARGS="--context kind-seaglass-dev -A --debug"
 
 Debug logs go to `~/.local/state/seaglass/seaglass.log` (or `$XDG_STATE_HOME`).
 
+seaglass remembers the last context, and per context the last namespace and
+resource, in `state.json` next to the log. Flags override what it remembers.
+
 ## Keys
 
 | Key | Action |

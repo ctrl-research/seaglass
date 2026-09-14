@@ -8,11 +8,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 
 	tea "charm.land/bubbletea/v2"
 	"k8s.io/klog/v2"
 
 	"github.com/ctrl-research/seaglass/internal/app"
+	"github.com/ctrl-research/seaglass/internal/config"
 	"github.com/ctrl-research/seaglass/internal/k8s"
 )
 
@@ -57,21 +59,50 @@ func run() error {
 	}
 	defer closeLog()
 
+	// Flags win over remembered state, which wins over kubeconfig defaults.
+	store, err := config.DefaultStore()
+	if err != nil {
+		return err
+	}
+	saved, err := store.Load()
+	if err != nil {
+		slog.Warn("ignoring unreadable state", "err", err)
+	}
+	if kubeContext == "" && saved.LastContext != "" {
+		if names, _, err := k8s.ListContexts(); err == nil && slices.Contains(names, saved.LastContext) {
+			kubeContext = saved.LastContext
+		}
+	}
+
 	client, err := k8s.New(kubeContext, namespace)
 	if err != nil {
 		return err
 	}
 	ns := client.Namespace
+	res := k8s.Pods
+	if cs, ok := saved.For(client.Context); ok {
+		if namespace == "" && !allNS {
+			if cs.AllNamespaces {
+				ns = ""
+			} else if cs.Namespace != "" {
+				ns = cs.Namespace
+			}
+		}
+		if cs.Resource != nil {
+			res = *cs.Resource
+		}
+	}
 	if allNS {
 		ns = ""
 	}
-	slog.Info("starting", "version", version, "context", client.Context, "namespace", ns)
+	slog.Info("starting", "version", version, "context", client.Context, "namespace", ns, "resource", res.Name())
 
 	m := app.New(app.Options{
 		Client:    client,
 		Namespace: ns,
-		Resource:  k8s.Pods,
+		Resource:  res,
 		Version:   version,
+		State:     store,
 	})
 	_, err = tea.NewProgram(m).Run()
 	return err
@@ -84,16 +115,8 @@ func setupLogging(debug bool) (func(), error) {
 		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 		return func() {}, nil
 	}
-	dir := os.Getenv("XDG_STATE_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, err
-		}
-		dir = filepath.Join(home, ".local", "state")
-	}
-	dir = filepath.Join(dir, "seaglass")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	dir, err := config.StateDir()
+	if err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(filepath.Join(dir, "seaglass.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)

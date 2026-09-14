@@ -11,9 +11,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/ctrl-research/seaglass/internal/config"
 	"github.com/ctrl-research/seaglass/internal/k8s"
 	"github.com/ctrl-research/seaglass/internal/ui"
 )
+
+// stateStore persists UI state between runs. Nil disables persistence.
+type stateStore interface {
+	Load() (config.State, error)
+	Save(config.State) error
+}
 
 // Options configures the root model.
 type Options struct {
@@ -21,6 +28,8 @@ type Options struct {
 	Namespace string // "" means all namespaces
 	Resource  k8s.Resource
 	Version   string // seaglass build version for the header
+	// State persists the last context, namespace, and resource. Optional.
+	State stateStore
 
 	// streamer and getter override the client for tests.
 	streamer streamer
@@ -49,6 +58,9 @@ type Model struct {
 
 	version       string // seaglass version
 	serverVersion string // fetched from /version
+
+	state     stateStore
+	lastSaved string // fingerprint of the last persisted position
 
 	width, height int
 }
@@ -86,6 +98,7 @@ func New(opts Options) Model {
 		palette:   newPalette(),
 		contexts:  opts.contexts,
 		version:   opts.Version,
+		state:     opts.State,
 	}
 	if m.deps.stream == nil && opts.Client != nil {
 		m.deps.stream = clientStreamer{opts.Client}
@@ -207,8 +220,44 @@ func (m *Model) rebuildPalette() {
 	m.palette.setItems(buildItems(m.resources, m.namespaces, m.contexts))
 }
 
-// Update handles messages.
+// Update handles messages, then persists the position if it changed.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	nm := next.(Model)
+	if save := nm.persist(); save != nil {
+		cmd = tea.Batch(cmd, save)
+	}
+	return nm, cmd
+}
+
+// persist returns a command that saves the current position when it
+// differs from the last save.
+func (m *Model) persist() tea.Cmd {
+	if m.state == nil || m.client == nil || m.connecting != "" {
+		return nil
+	}
+	res := m.currentResource()
+	key := m.client.Context + "\x00" + m.namespace + "\x00" + res.GVR.String()
+	if key == m.lastSaved {
+		return nil
+	}
+	m.lastSaved = key
+	store, ctx, ns := m.state, m.client.Context, m.namespace
+	return func() tea.Msg {
+		st, err := store.Load()
+		if err != nil {
+			slog.Warn("load state", "err", err)
+			st = config.State{}
+		}
+		st.Update(ctx, config.ContextState{Namespace: ns, AllNamespaces: ns == "", Resource: &res})
+		if err := store.Save(st); err != nil {
+			slog.Warn("save state", "err", err)
+		}
+		return nil
+	}
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height

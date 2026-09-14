@@ -6,13 +6,24 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/ctrl-research/seaglass/internal/config"
 	"github.com/ctrl-research/seaglass/internal/k8s"
 )
+
+// memStore is an in-memory stateStore.
+type memStore struct {
+	st    config.State
+	saves int
+}
+
+func (s *memStore) Load() (config.State, error) { return s.st, nil }
+func (s *memStore) Save(st config.State) error  { s.st = st; s.saves++; return nil }
 
 // fakeStreamer records stream requests and lets tests feed updates.
 type fakeStreamer struct {
@@ -561,5 +572,87 @@ func TestHeaderShownAndHidden(t *testing.T) {
 	}
 	if !strings.Contains(out, "Running") {
 		t.Error("table should still render on a short terminal")
+	}
+}
+
+func TestPersistsPositionChanges(t *testing.T) {
+	store := &memStore{}
+	fs := &fakeStreamer{}
+	m := New(Options{
+		Client:    &k8s.Client{Context: "test-ctx", Namespace: "default"},
+		Namespace: "default",
+		Resource:  k8s.Pods,
+		streamer:  fs,
+		getter:    &fakeGetter{},
+		contexts:  []string{"test-ctx"},
+		State:     store,
+	})
+	rv(m).start(m.deps)
+	run := func(msg tea.Msg) {
+		mm, cmd := m.Update(msg)
+		m = mm.(Model)
+		execCmd(cmd)
+	}
+	run(tea.WindowSizeMsg{Width: 100, Height: 24})
+	if store.saves != 1 {
+		t.Fatalf("initial position should be saved once, got %d", store.saves)
+	}
+	run(resourcesMsg{resources: []k8s.Resource{k8s.Pods, deployments}})
+	run(namespacesMsg{names: []string{"default", "kube-system"}})
+	run(key("j")) // cursor moves must not save
+	if store.saves != 1 {
+		t.Errorf("unrelated updates saved state: %d", store.saves)
+	}
+
+	run(key(":"))
+	for _, r := range "ns kube-sys" {
+		run(key(string(r)))
+	}
+	run(key("enter"))
+	if store.saves != 2 {
+		t.Fatalf("namespace change should save, got %d saves", store.saves)
+	}
+	cs, ok := store.st.For("test-ctx")
+	if !ok || cs.Namespace != "kube-system" || cs.AllNamespaces || cs.Resource.GVR.Resource != "pods" {
+		t.Errorf("saved %+v", cs)
+	}
+
+	run(key(":"))
+	for _, r := range "deploy" {
+		run(key(string(r)))
+	}
+	run(key("enter"))
+	cs, _ = store.st.For("test-ctx")
+	if store.saves != 3 || cs.Resource.GVR.Resource != "deployments" {
+		t.Errorf("resource change: saves=%d resource=%+v", store.saves, cs.Resource)
+	}
+
+	run(key("esc")) // back to pods
+	cs, _ = store.st.For("test-ctx")
+	if store.saves != 4 || cs.Resource.GVR.Resource != "pods" {
+		t.Errorf("pop should save the resumed resource: saves=%d resource=%+v", store.saves, cs.Resource)
+	}
+	if store.st.LastContext != "test-ctx" {
+		t.Errorf("last context = %q", store.st.LastContext)
+	}
+}
+
+// execCmd runs a command and, for batches, each member, giving each a
+// short window. Stream waits block forever on the fake streamer and are
+// simply abandoned.
+func execCmd(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	select {
+	case msg := <-done:
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, c := range batch {
+				execCmd(c)
+			}
+		}
+	case <-time.After(200 * time.Millisecond):
 	}
 }

@@ -19,10 +19,10 @@ import (
 
 // Resource describes one listable, watchable API resource.
 type Resource struct {
-	GVR        schema.GroupVersionResource
-	Kind       string
-	Namespaced bool
-	ShortNames []string
+	GVR        schema.GroupVersionResource `json:"gvr"`
+	Kind       string                      `json:"kind"`
+	Namespaced bool                        `json:"namespaced"`
+	ShortNames []string                    `json:"shortNames,omitempty"`
 }
 
 // Pods is the default resource shown on startup.
