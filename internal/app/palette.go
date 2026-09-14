@@ -20,6 +20,7 @@ const (
 	itemNamespace
 	itemContext
 	itemSort
+	itemAction
 )
 
 func (k itemKind) String() string {
@@ -30,10 +31,18 @@ func (k itemKind) String() string {
 		return "namespace"
 	case itemSort:
 		return "column"
+	case itemAction:
+		return "action"
 	default:
 		return "context"
 	}
 }
+
+// Palette actions.
+const (
+	actionQuit = "quit"
+	actionHelp = "help"
+)
 
 // paletteItem is one selectable entry.
 type paletteItem struct {
@@ -101,6 +110,10 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 	for _, c := range contexts {
 		items = append(items, paletteItem{Kind: itemContext, Label: c, Detail: "context", Name: c, search: strings.ToLower("ctx context " + c)})
 	}
+	items = append(items,
+		paletteItem{Kind: itemAction, Label: "help", Detail: "show every key for this view", Name: actionHelp, search: "help keys ?"},
+		paletteItem{Kind: itemAction, Label: "quit", Detail: "exit seaglass", Name: actionQuit, search: "quit exit q :q"},
+	)
 	return items
 }
 

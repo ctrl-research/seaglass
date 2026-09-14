@@ -773,3 +773,41 @@ func TestHelpOverlay(t *testing.T) {
 		t.Error("esc should close help, not pop the view")
 	}
 }
+
+func TestPaletteQuitAndHelpActions(t *testing.T) {
+	for _, q := range []string{"quit", "exit", ":q"} {
+		m, _ := newTest(t)
+		m, _ = press(m, ":")
+		m = typeStr(m, q)
+		it, ok := m.palette.selected()
+		if !ok || it.Kind != itemAction || it.Name != actionQuit {
+			t.Fatalf("%q selected %+v", q, it)
+		}
+		_, cmd := press(m, "enter")
+		if cmd == nil {
+			t.Fatalf("%q: expected a quit cmd", q)
+		}
+		if _, isQuit := cmd().(tea.QuitMsg); !isQuit {
+			// choose returns tea.Quit directly, but it may be batched.
+			if b, ok := cmd().(tea.BatchMsg); ok {
+				for _, c := range b {
+					if c != nil {
+						if _, isQuit = c().(tea.QuitMsg); isQuit {
+							break
+						}
+					}
+				}
+			}
+			if !isQuit {
+				t.Errorf("%q: expected QuitMsg", q)
+			}
+		}
+	}
+	m, _ := newTest(t)
+	m, _ = press(m, ":")
+	m = typeStr(m, "help")
+	m, _ = press(m, "enter")
+	if !m.showHelp {
+		t.Error("help action should open the overlay")
+	}
+}

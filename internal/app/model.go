@@ -423,6 +423,17 @@ func (m Model) helpSections() []ui.HelpSection {
 // choose acts on a palette selection.
 func (m *Model) choose(it paletteItem) tea.Cmd {
 	switch it.Kind {
+	case itemAction:
+		switch it.Name {
+		case actionQuit:
+			for _, v := range m.stack {
+				v.stop()
+			}
+			return tea.Quit
+		case actionHelp:
+			m.showHelp = true
+		}
+		return nil
 	case itemSort:
 		if rv, ok := m.top().(*resourceView); ok {
 			rv.setSort(it.Index)

@@ -42,7 +42,8 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | `q` or `ctrl+c` | Quit |
 
 Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
-`ns all` returns to all namespaces, `ctx prod` narrows to contexts. Choosing a resource pushes a new view;
+`ns all` returns to all namespaces, `ctx prod` narrows to contexts. The
+palette also has `quit` (also `exit` or `:q`) and `help` actions. Choosing a resource pushes a new view;
 choosing a namespace keeps the current resource and resets the view stack;
 choosing a context reconnects.
 
