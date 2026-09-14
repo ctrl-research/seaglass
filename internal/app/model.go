@@ -20,6 +20,7 @@ type Options struct {
 	Client    *k8s.Client
 	Namespace string // "" means all namespaces
 	Resource  k8s.Resource
+	Version   string // seaglass build version for the header
 
 	// streamer and getter override the client for tests.
 	streamer streamer
@@ -46,6 +47,9 @@ type Model struct {
 	connecting string // context name while switching, "" otherwise
 	err        error
 
+	version       string // seaglass version
+	serverVersion string // fetched from /version
+
 	width, height int
 }
 
@@ -67,6 +71,10 @@ type (
 		client *k8s.Client
 		err    error
 	}
+	versionMsg struct {
+		version string
+		err     error
+	}
 )
 
 // New builds the root model. Streaming starts in Init.
@@ -77,6 +85,7 @@ func New(opts Options) Model {
 		namespace: opts.Namespace,
 		palette:   newPalette(),
 		contexts:  opts.contexts,
+		version:   opts.Version,
 	}
 	if m.deps.stream == nil && opts.Client != nil {
 		m.deps.stream = clientStreamer{opts.Client}
@@ -113,6 +122,10 @@ func (m Model) discoverCmds() []tea.Cmd {
 			defer cancel()
 			rs, err := c.Resources(ctx)
 			return resourcesMsg{resources: rs, err: err}
+		},
+		func() tea.Msg {
+			v, err := c.ServerVersion(context.Background())
+			return versionMsg{version: v, err: err}
 		},
 		func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -152,9 +165,42 @@ func (m *Model) currentResource() k8s.Resource {
 	return k8s.Pods
 }
 
+// header describes the top block for the current state.
+func (m Model) header() ui.Header {
+	ns := m.namespace
+	if ns == "" {
+		ns = "all"
+	}
+	h := ui.Header{
+		Left:  []ui.Field{{Key: "context", Value: "-"}, {Key: "namespace", Value: ns}, {Key: "user", Value: "-"}},
+		Right: []ui.Field{{Key: "cluster", Value: "-"}, {Key: "k8s", Value: orDash(m.serverVersion)}, {Key: "seaglass", Value: orDash(m.version)}},
+	}
+	if m.client != nil {
+		h.Left[0].Value = m.client.Context
+		h.Left[2].Value = orDash(m.client.User)
+		h.Right[0].Value = orDash(m.client.Host)
+	}
+	return h
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+// headerHeight is the lines the header takes, 0 when hidden.
+func (m Model) headerHeight() int {
+	if m.header().Visible(m.width, m.height) {
+		return ui.HeaderHeight
+	}
+	return 0
+}
+
 // bodyHeight is the height available to the top view.
 func (m Model) bodyHeight() int {
-	return max(m.height-1-m.palette.height(), 1)
+	return max(m.height-1-m.headerHeight()-m.palette.height(), 1)
 }
 
 func (m *Model) rebuildPalette() {
@@ -216,6 +262,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.useClient(msg.client)
+
+	case versionMsg:
+		if msg.err == nil {
+			m.serverVersion = msg.version
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -355,6 +407,7 @@ func (m *Model) useClient(c *k8s.Client) tea.Cmd {
 	m.deps = deps{stream: clientStreamer{c}, get: c}
 	m.namespace = c.Namespace
 	m.resources, m.namespaces = nil, nil
+	m.serverVersion = ""
 	m.err = nil
 	res := m.currentResource()
 	m.stack = nil
@@ -403,6 +456,9 @@ func (m Model) View() tea.View {
 	}
 
 	parts := []string{}
+	if m.headerHeight() > 0 {
+		parts = append(parts, m.header().Render(m.width))
+	}
 	if m.palette.open {
 		parts = append(parts, m.palette.view(m.width))
 	}

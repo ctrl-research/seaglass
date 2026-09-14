@@ -71,6 +71,7 @@ func run() error {
 		Client:    client,
 		Namespace: ns,
 		Resource:  k8s.Pods,
+		Version:   version,
 	})
 	_, err = tea.NewProgram(m).Run()
 	return err

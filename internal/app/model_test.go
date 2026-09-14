@@ -530,3 +530,36 @@ func TestPaletteFromObjectViewPushesTable(t *testing.T) {
 		t.Errorf("palette from object view: top=%s calls=%v", rv(m).res.Name(), fs.calls)
 	}
 }
+
+func TestHeaderShownAndHidden(t *testing.T) {
+	m, _ := newTest(t)
+	mm, _ := m.Update(versionMsg{version: "v1.30.0"})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	out := stripANSI(m.View().Content)
+	for _, want := range []string{"┌─┐┌─┐", "context: test-ctx", "namespace: default", "k8s: v1.30.0", "────"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("header missing %q:\n%s", want, out)
+		}
+	}
+	if lines := strings.Count(out, "\n") + 1; lines != 24 {
+		t.Errorf("view has %d lines, want 24", lines)
+	}
+	// Table must still show rows beneath the header.
+	if !strings.Contains(out, "Running") {
+		t.Error("table hidden by header")
+	}
+
+	mm, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
+	m = mm.(Model)
+	out = stripANSI(m.View().Content)
+	if strings.Contains(out, "┌─┐") {
+		t.Error("header should hide on a short terminal")
+	}
+	if lines := strings.Count(out, "\n") + 1; lines != 12 {
+		t.Errorf("view has %d lines, want 12", lines)
+	}
+	if !strings.Contains(out, "Running") {
+		t.Error("table should still render on a short terminal")
+	}
+}

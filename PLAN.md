@@ -126,7 +126,7 @@ Gate: I can open it against production and see pods update live.
   heuristic highlighting, managedFields stripped, `c` copies via OSC52.
   Object views fetch once; `r` reloads. Live single-object watch later.
 - [ ] Column sort (`shift+letter` or a sort picker). Wide/narrow column toggle.
-- [ ] Header: small ASCII logo at the top left, context/namespace/cluster
+- [x] Header: small ASCII logo at the top left, context/namespace/cluster
   info beside it, separated from the table by a single horizontal rule.
   Like k9s but shorter and without borders. Must collapse to one line or
   disappear on short terminals.

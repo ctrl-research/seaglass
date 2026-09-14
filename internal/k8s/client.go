@@ -22,6 +22,10 @@ type Client struct {
 	Context string
 	// Namespace is the default namespace for the context, or the override.
 	Namespace string
+	// Host is the API server URL.
+	Host string
+	// User is the kubeconfig user (AuthInfo) name for the context.
+	User string
 
 	cfg  *rest.Config
 	rest *rest.RESTClient
@@ -88,7 +92,14 @@ func New(kubeContext, namespace string) (*Client, error) {
 		return nil, fmt.Errorf("build rest client: %w", err)
 	}
 
-	return &Client{Context: ctxName, Namespace: ns, cfg: cfg, rest: rest}, nil
+	return &Client{
+		Context:   ctxName,
+		Namespace: ns,
+		Host:      cfg.Host,
+		User:      raw.Contexts[ctxName].AuthInfo,
+		cfg:       cfg,
+		rest:      rest,
+	}, nil
 }
 
 // resourcePath returns the URL path segments for a resource collection.

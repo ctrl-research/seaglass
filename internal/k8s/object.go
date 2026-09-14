@@ -41,3 +41,20 @@ func ToYAML(u *unstructured.Unstructured) (string, error) {
 	}
 	return string(b), nil
 }
+
+// ServerVersion returns the API server's git version, e.g. "v1.30.1".
+func (c *Client) ServerVersion(ctx context.Context) (string, error) {
+	vctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	raw, err := c.rest.Get().AbsPath("version").Do(vctx).Raw()
+	if err != nil {
+		return "", fmt.Errorf("server version: %w", err)
+	}
+	var v struct {
+		GitVersion string `json:"gitVersion"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "", fmt.Errorf("decode server version: %w", err)
+	}
+	return v.GitVersion, nil
+}
