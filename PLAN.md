@@ -29,9 +29,15 @@ These are the bets. Anything not on this list is a non-goal until v0.1.
    with sane defaults. No skins/plugins/hotkeys/aliases split across files.
 8. **Fast to open.** Lazy informers (only the resource on screen), discovery
    cached on disk, sub-second to first table.
+9. **GitOps-aware, Flux first.** k9s has no Flux features beyond community
+   plugins. seaglass shows what Flux manages an object, why a Kustomization
+   or HelmRelease is not Ready, and lets you reconcile, suspend, and resume
+   without leaving. Built on generic mechanisms (label-based jumps, patch
+   actions, multi-resource views) so Argo CD later is configuration, not code.
 
 Non-goals for now: multi-cluster views, a plugin system, metrics/pulses
-dashboards, Helm, xray-style trees, mouse support, Windows.
+dashboards, Helm (outside Flux HelmReleases), xray-style trees, mouse
+support, Windows.
 
 ## Stack
 
@@ -153,7 +159,53 @@ Gate: k9s is uninstalled.
 
 Gate: I can diagnose a failing rollout without leaving the tool.
 
-### M4 — Config, polish, resilience (about 1 week) → `v0.0.5`
+### M4 — Flux (about 1 to 2 weeks) → `v0.0.5`
+
+Already free, thanks to discovery and the Table transform: every Flux CRD
+(Kustomization, HelmRelease, GitRepository, OCIRepository, HelmRepository,
+HelmChart, Bucket, Alert, Provider, Receiver, ImageRepository, ImagePolicy,
+ImageUpdateAutomation) lists with its own Ready/Status/Age columns, and the
+detail view shows its conditions, including the Ready message that carries
+the applied revision.
+
+- [ ] Flux overview: a `flux` palette entry opens one table of every Flux
+  kind in scope, not-ready rows first, with a KIND column. Built as a
+  generic "resource group" view that merges several streams, reusable for
+  a workloads group (Deployments, StatefulSets, DaemonSets, Jobs).
+- [ ] Reconcile: patch `reconcile.fluxcd.io/requestedAt` on the selected
+  object; offer "with source" to reconcile the source first, like
+  `flux reconcile --with-source`. Then watch until
+  `status.lastHandledReconcileAt` matches and report Ready or the failure
+  message in the status bar.
+- [ ] Suspend and resume: patch `spec.suspend`, with a confirm on suspend.
+  Suspended rows get a muted color.
+- [ ] Not-ready surfacing: rows with a Ready=False condition get a warning
+  color in every table. Kustomization and HelmRelease detail shows
+  `lastAppliedRevision`, `lastAttemptedRevision`, and the Ready message
+  at the top, before the generic sections.
+- [ ] Trace (`flux trace`): from any object, follow the
+  `kustomize.toolkit.fluxcd.io/name` and `/namespace` labels (or the
+  `helm.toolkit.fluxcd.io/*` labels) to its Kustomization or HelmRelease,
+  then `spec.sourceRef` to the source, and show the chain in the detail
+  view: "Managed by Kustomization/apps ← GitRepository/flux-system @
+  main/abc1234". Each link is jumpable.
+- [ ] Inventory: Kustomization detail lists `status.inventory.entries` as
+  a jumpable list of the objects it manages. HelmRelease jumps to its
+  workloads by label.
+- [ ] Dependencies: Kustomization detail shows `spec.dependsOn` with each
+  dependency's Ready state, so a stuck chain is visible at a glance.
+- [ ] Fixtures: `make demo-flux` runs `flux install` on the kind cluster and
+  applies a GitRepository plus Kustomization pointing at a public sample
+  (fluxcd/flux2-kustomize-helm-example or podinfo), including one that is
+  deliberately broken.
+
+Parked for Flux: `flux diff` (needs a local kustomize build), image
+automation views, controller log correlation per object, Argo CD.
+
+Gate: I stop reaching for the `flux` CLI to check why something is not
+Ready, and to reconcile it.
+
+### M5 — Config, polish, resilience (about 1 week) → `v0.0.6`
 
 - `seaglass.yaml`: theme (a few built-in, plus overrides), keymap
   overrides, resource aliases, default namespace/context, log defaults.
@@ -172,7 +224,7 @@ Gate: I can diagnose a failing rollout without leaving the tool.
 Gate: no crashes or hangs in two weeks of daily use across the EKS
 contexts, homelab, and colima.
 
-### M5 — Distribution (a few days) → `v0.1.0`
+### M6 — Distribution (a few days) → `v0.1.0`
 
 Only when it has earned it. Everything before this is `go install` only.
 
@@ -185,7 +237,7 @@ Only when it has earned it. Everything before this is `go install` only.
 
 Multi-cluster fleet view, metrics-server integration for CPU/memory columns,
 plugin/hook system, Helm releases view, RBAC "can I" view, node shell,
-benchmarking, mouse support.
+benchmarking, mouse support, Argo CD support on the Flux mechanisms.
 
 ## Risks and mitigations
 
