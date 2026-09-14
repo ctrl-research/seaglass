@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,19 +99,58 @@ func (f *fakeLogger) Logs(ctx context.Context, ns, pod, container string, opts k
 	return ch, nil
 }
 
-// fakeExecer records shell requests and returns a no-op command.
-type fakeExecer struct{ calls []string }
+// fakeExecer simulates a remote shell: it prints a prompt, echoes every
+// byte it reads from stdin, and exits when the context ends or it reads
+// "exit\r". RunCommand answers the user probe.
+type fakeExecer struct {
+	mu    sync.Mutex
+	calls []string
+	user  string
+}
 
-type noopExec struct{}
+func (f *fakeExecer) Exec(ctx context.Context, o k8s.ExecOptions) error {
+	f.mu.Lock()
+	f.calls = append(f.calls, o.Namespace+"/"+o.Pod+"/"+o.Container)
+	f.mu.Unlock()
+	if !o.TTY {
+		return nil
+	}
+	_, _ = o.Stdout.Write([]byte("$ "))
+	buf := make([]byte, 64)
+	var line []byte
+	for {
+		n, err := o.Stdin.Read(buf)
+		if err != nil {
+			return nil
+		}
+		for _, b := range buf[:n] {
+			if b == 0x7f || b == '\b' {
+				if len(line) > 0 {
+					line = line[:len(line)-1]
+					_, _ = o.Stdout.Write([]byte("\b \b"))
+				}
+				continue
+			}
+			if b == '\r' {
+				if string(line) == "exit" {
+					_, _ = o.Stdout.Write([]byte("\r\nbye\r\n"))
+					return nil
+				}
+				line = nil
+				_, _ = o.Stdout.Write([]byte("\r\n$ "))
+				continue
+			}
+			line = append(line, b)
+			_, _ = o.Stdout.Write([]byte{b})
+		}
+	}
+}
 
-func (noopExec) Run() error          { return nil }
-func (noopExec) SetStdin(io.Reader)  {}
-func (noopExec) SetStdout(io.Writer) {}
-func (noopExec) SetStderr(io.Writer) {}
-
-func (f *fakeExecer) Shell(ns, pod, container string, _ []string) tea.ExecCommand {
-	f.calls = append(f.calls, ns+"/"+pod+"/"+container)
-	return noopExec{}
+func (f *fakeExecer) RunCommand(context.Context, string, string, string, []string) (string, error) {
+	if f.user == "" {
+		return "root", nil
+	}
+	return f.user, nil
 }
 
 // rv asserts the top view is a table view.
@@ -176,6 +215,8 @@ func kp(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyDown}
 	case "ctrl+c":
 		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	case "ctrl+]":
+		return tea.KeyPressMsg{Code: ']', Mod: tea.ModCtrl}
 	}
 	r := []rune(s)
 	return tea.KeyPressMsg{Code: r[0], Text: s}
@@ -1341,7 +1382,51 @@ func TestLogsOnNonPodIsANotice(t *testing.T) {
 
 func fe(m Model) *fakeExecer { return m.deps.exec.(*fakeExecer) }
 
-func TestShellPicksContainerThenExecs(t *testing.T) {
+// runShellCmd executes the batch a shell start returns, feeding the first
+// output and the user probe back into the model.
+func runShellCmd(m *Model, cmd tea.Cmd) {
+	execCmdInto(m, cmd)
+}
+
+// pumpOnce runs the shell's wait command synchronously and feeds its
+// message into the model. It fails the test if nothing arrives, rather than
+// leaving a goroutine behind that would steal the next output.
+func pumpOnce(t *testing.T, m *Model) {
+	t.Helper()
+	sv := m.top().(*shellView)
+	if sv.done {
+		return
+	}
+	got := make(chan tea.Msg, 1)
+	go func() { got <- sv.wait()() }()
+	select {
+	case msg := <-got:
+		mm, _ := m.Update(msg)
+		*m = mm.(Model)
+	case <-time.After(3 * time.Second):
+		t.Fatal("no shell output or exit arrived")
+	}
+}
+
+// pumpUntilDone pumps until the session reports exit.
+func pumpUntilDone(t *testing.T, m *Model) {
+	t.Helper()
+	for i := 0; i < 10 && !m.top().(*shellView).done; i++ {
+		pumpOnce(t, m)
+	}
+}
+
+// shellText is the emulator screen, ANSI stripped and trailing space trimmed.
+func shellText(m Model) string {
+	sv := m.top().(*shellView)
+	lines := strings.Split(stripANSI(sv.em.Render()), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " ")
+	}
+	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
+}
+
+func TestShellPicksContainerThenEmbeds(t *testing.T) {
 	m, _, _ := newTestFull(t)
 	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
 	m, _ = press(m, "down") // b, which has app and sidecar
@@ -1354,48 +1439,85 @@ func TestShellPicksContainerThenExecs(t *testing.T) {
 	if !m.palette.open || m.execTarget == nil {
 		t.Fatal("two containers should open a picker")
 	}
-	if it, ok := m.palette.selected(); !ok || it.Kind != itemExec || it.Label != "app" {
-		t.Fatalf("first pick = %+v", it)
-	}
 	m = typeStr(m, "side")
 	m, cmd = press(m, "enter")
-	if cmd == nil || m.execTarget != nil {
-		t.Fatal("choosing a container should start the shell")
+	sv, ok := m.top().(*shellView)
+	if !ok || sv.container != "sidecar" {
+		t.Fatalf("top = %T", m.top())
 	}
-	// The command is a tea.Exec; run it to get the callback message.
-	msg := cmd()
-	if batch, ok := msg.(tea.BatchMsg); ok {
-		for _, c := range batch {
-			if c != nil {
-				if em, ok := c().(execDoneMsg); ok {
-					msg = em
-				}
-			}
+	runShellCmd(&m, cmd)
+	if len(fe(m).calls) != 1 || fe(m).calls[0] != "default/b/sidecar" {
+		t.Errorf("exec calls = %v", fe(m).calls)
+	}
+	out := stripANSI(m.View().Content)
+	for _, want := range []string{"test-ctx › default › pods › b › shell: sidecar", "user root", "default/b", "$ "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("shell view missing %q:\n%s", want, out)
 		}
 	}
-	if len(fe(m).calls) != 1 || fe(m).calls[0] != "default/b/sidecar" {
-		t.Errorf("shell calls = %v", fe(m).calls)
+	if !strings.Contains(sv.hint(), "ctrl+] closes it") {
+		t.Errorf("hint = %q", sv.hint())
 	}
-	mm, _ = m.Update(execDoneMsg{tgt: target{res: k8s.Pods, namespace: "default", name: "b"}, container: "sidecar"})
-	m = mm.(Model)
-	if !strings.Contains(stripANSI(m.View().Content), "shell closed: Pod default/b [sidecar]") {
-		t.Error("notice after shell missing")
+	if !strings.Contains(out, "/ ___|") {
+		t.Error("header should stay visible around the shell")
 	}
-	_ = msg
+	if m.View().Cursor == nil {
+		t.Error("shell should place the cursor")
+	}
+	// Keys go to the shell and echo back through the emulator.
+	m, _ = press(m, "l")
+	pumpOnce(t, &m)
+	m, _ = press(m, "s")
+	pumpOnce(t, &m)
+	if got := shellText(m); got != "$ ls" {
+		t.Errorf("screen = %q", got)
+	}
+	// q does not quit while the shell runs.
+	m, _ = press(m, "q")
+	pumpOnce(t, &m)
+	if len(m.stack) != 2 || m.top().(*shellView).done {
+		t.Fatal("q must go to the shell, not quit")
+	}
+	// exit ends the session; the view stays until esc.
+	for _, r := range "\x7f\x7f\x7fexit" {
+		if r == '\x7f' {
+			mm, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+		} else {
+			mm, _ = m.Update(kp(string(r)))
+		}
+		m = mm.(Model)
+		pumpOnce(t, &m)
+	}
+	m, _ = press(m, "enter")
+	pumpUntilDone(t, &m)
+	if !m.top().(*shellView).done {
+		t.Fatal("exit should end the session")
+	}
+	out = stripANSI(m.View().Content)
+	if !strings.Contains(out, "shell exited") || !strings.Contains(out, "exited · user root") {
+		t.Errorf("exited state missing:\n%s", out)
+	}
+	m, _ = press(m, "esc")
+	if _, ok := m.top().(*resourceView); !ok {
+		t.Error("esc after exit should return to the table")
+	}
 }
 
-func TestShellSingleContainerSkipsPicker(t *testing.T) {
+func TestShellCloseKey(t *testing.T) {
 	m, _, fg := newTestFull(t)
 	fg.obj.Object["spec"] = map[string]any{"containers": []any{map[string]any{"name": "only"}}}
 	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
 	m, cmd := press(m, "x")
 	mm, cmd := m.Update(cmd())
 	m = mm.(Model)
-	if m.palette.open || cmd == nil {
-		t.Fatal("one container should exec directly")
+	if m.palette.open {
+		t.Fatal("one container should open the shell directly")
 	}
-	if len(fe(m).calls) != 1 || fe(m).calls[0] != "default/a/only" {
-		t.Errorf("shell calls = %v", fe(m).calls)
+	runShellCmd(&m, cmd)
+	m, _ = press(m, "ctrl+]")
+	pumpUntilDone(t, &m)
+	if !m.top().(*shellView).done {
+		t.Error("ctrl+] should end the session")
 	}
 }
 
@@ -1420,10 +1542,17 @@ func TestShellOnNonPodIsANotice(t *testing.T) {
 }
 
 func TestShellErrorShown(t *testing.T) {
-	m, _, _ := newTestFull(t)
-	mm, _ := m.Update(execDoneMsg{tgt: target{res: k8s.Pods, namespace: "default", name: "a"}, container: "c", err: errors.New("executable file not found")})
+	m, _, fg := newTestFull(t)
+	fg.obj.Object["spec"] = map[string]any{"containers": []any{map[string]any{"name": "only"}}}
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "x")
+	mm, cmd := m.Update(cmd())
+	m = mm.(Model)
+	runShellCmd(&m, cmd)
+	sv := m.top().(*shellView)
+	mm, _ = m.Update(shellExitMsg{id: sv.id, err: errors.New("executable file not found")})
 	m = mm.(Model)
 	if !strings.Contains(stripANSI(m.View().Content), "executable file not found") {
-		t.Error("exec error should show")
+		t.Error("exec error should show in the body")
 	}
 }

@@ -111,12 +111,6 @@ type (
 		names []string
 		err   error
 	}
-	// execDoneMsg reports the end of a shell session.
-	execDoneMsg struct {
-		tgt       target
-		container string
-		err       error
-	}
 )
 
 // New builds the root model. Streaming starts in Init.
@@ -145,7 +139,7 @@ func New(opts Options) Model {
 		m.deps.logs = opts.Client
 	}
 	if m.deps.exec == nil && opts.Client != nil {
-		m.deps.exec = clientExecer{opts.Client}
+		m.deps.exec = opts.Client
 	}
 	if m.saveDir == "" {
 		m.saveDir = "."
@@ -363,12 +357,23 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.top().resize(m.width, m.bodyHeight())
 		return m, cmd
 
-	case execDoneMsg:
-		if msg.err != nil {
-			m.err = msg.err
-			return m, nil
+	case shellOutputMsg:
+		if sv, ok := m.top().(*shellView); ok && sv.id == msg.id {
+			return m, sv.handleOutput(msg)
 		}
-		return m, m.setNotice("shell closed: " + msg.tgt.String() + " [" + msg.container + "]")
+		return m, nil
+
+	case shellExitMsg:
+		if sv, ok := m.top().(*shellView); ok && sv.id == msg.id {
+			sv.handleExit(msg)
+		}
+		return m, nil
+
+	case shellUserMsg:
+		if sv, ok := m.top().(*shellView); ok && sv.id == msg.id {
+			sv.user = msg.user
+		}
+		return m, nil
 
 	case logLinesMsg:
 		if lv, ok := m.top().(*logsView); ok && lv.id == msg.id {
@@ -650,13 +655,13 @@ func (m *Model) trigger(a action, rv *resourceView) tea.Cmd {
 	return runAction(m.deps.patch, pa)
 }
 
-// shell hands the terminal to an interactive session in the container and
-// reports when it ends.
+// shell pushes an embedded shell view for the container.
 func (m *Model) shell(tgt target, container string) tea.Cmd {
-	cmd := m.deps.exec.Shell(tgt.namespace, tgt.name, container, nil)
-	return tea.Exec(cmd, func(err error) tea.Msg {
-		return execDoneMsg{tgt: tgt, container: container, err: err}
-	})
+	m.top().stop()
+	m.nextID++
+	v := newShellView(m.nextID, tgt.namespace, tgt.name, container)
+	m.stack = append(m.stack, v)
+	return m.startTop()
 }
 
 // setNotice shows a transient success message for a few seconds.
@@ -792,7 +797,7 @@ func (m *Model) useClient(c *k8s.Client) tea.Cmd {
 		v.stop()
 	}
 	m.client = c
-	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c, logs: c, exec: clientExecer{c}}
+	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c, logs: c, exec: c}
 	m.namespace = c.Namespace
 	m.resources, m.namespaces = nil, nil
 	m.serverVersion = ""
@@ -879,6 +884,11 @@ func (m Model) View() tea.View {
 	}
 	parts = append(parts, bar.Render(m.width))
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, parts...))
+	if sv, ok := top.(*shellView); ok && m.confirm == nil && !m.showHelp && !m.palette.open {
+		if pos := sv.cursor(); pos != nil {
+			v.Cursor = tea.NewCursor(pos.X, pos.Y+m.headerHeight()+m.prompt.height())
+		}
+	}
 	if m.client != nil {
 		v.WindowTitle = "seaglass · " + m.client.Context
 	}
