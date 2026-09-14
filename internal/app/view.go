@@ -31,6 +31,7 @@ type deps struct {
 	stream streamer
 	get    getter
 	patch  patcher
+	logs   logger
 }
 
 // viewStatus is what a view contributes to the status bar.

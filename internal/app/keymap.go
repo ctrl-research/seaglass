@@ -30,6 +30,15 @@ type keyMap struct {
 	Top        key.Binding
 	Bottom     key.Binding
 
+	// Logs
+	Logs          key.Binding
+	LogContainer  key.Binding
+	LogSince      key.Binding
+	LogTimestamps key.Binding
+	LogWrap       key.Binding
+	LogFollow     key.Binding
+	LogSave       key.Binding
+
 	// Palette and filter input
 	Accept   key.Binding
 	Up       key.Binding
@@ -61,6 +70,14 @@ var keys = keyMap{
 	Reload:     bind("r", "reload", "r"),
 	Top:        bind("g", "top", "g"),
 	Bottom:     bind("G", "bottom", "G"),
+
+	Logs:          bind("l", "logs", "l"),
+	LogContainer:  bind("c", "choose container", "c"),
+	LogSince:      bind("s", "since (time window)", "s"),
+	LogTimestamps: bind("t", "toggle timestamps", "t"),
+	LogWrap:       bind("w", "toggle wrap", "w"),
+	LogFollow:     bind("f", "follow (jump to end)", "f"),
+	LogSave:       bind("S", "save to file", "S"),
 
 	Accept:   bind("enter", "choose", "enter"),
 	Up:       bind("↑/ctrl+p", "previous", "up", "ctrl+p", "ctrl+k"),

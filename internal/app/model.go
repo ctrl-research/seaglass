@@ -33,10 +33,14 @@ type Options struct {
 	// State persists the last context, namespace, and resource. Optional.
 	State stateStore
 
-	// streamer, getter, and patcher override the client for tests.
+	// SaveDir is where log files are written. Defaults to the working dir.
+	SaveDir string
+
+	// streamer, getter, patcher, and logger override the client for tests.
 	streamer streamer
 	getter   getter
 	patcher  patcher
+	logger   logger
 	// contexts overrides kubeconfig context discovery for tests.
 	contexts []string
 }
@@ -69,6 +73,7 @@ type Model struct {
 
 	state     stateStore
 	lastSaved string // fingerprint of the last persisted position
+	saveDir   string
 
 	width, height int
 }
@@ -102,7 +107,8 @@ type (
 func New(opts Options) Model {
 	m := Model{
 		client:    opts.Client,
-		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher},
+		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger},
+		saveDir:   opts.SaveDir,
 		namespace: opts.Namespace,
 		palette:   newPalette(),
 		prompt:    newPrompt(),
@@ -118,6 +124,12 @@ func New(opts Options) Model {
 	}
 	if m.deps.patch == nil && opts.Client != nil {
 		m.deps.patch = opts.Client
+	}
+	if m.deps.logs == nil && opts.Client != nil {
+		m.deps.logs = opts.Client
+	}
+	if m.saveDir == "" {
+		m.saveDir = "."
 	}
 	m.pushResource(opts.Resource)
 	return m
@@ -169,6 +181,14 @@ func (m *Model) top() view { return m.stack[len(m.stack)-1] }
 func (m *Model) pushResource(res k8s.Resource) *resourceView {
 	m.nextID++
 	v := newResourceView(m.nextID, res, m.namespace)
+	m.stack = append(m.stack, v)
+	return v
+}
+
+// pushLogs adds a logs view for a pod. It does not start it.
+func (m *Model) pushLogs(ns, pod string) *logsView {
+	m.nextID++
+	v := newLogsView(m.nextID, ns, pod, m.saveDir)
 	m.stack = append(m.stack, v)
 	return v
 }
@@ -291,6 +311,18 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case objectMsg:
 		if ov, ok := m.top().(*objectView); ok && ov.id == msg.id {
 			ov.handle(msg)
+		}
+		return m, nil
+
+	case containersMsg:
+		if lv, ok := m.top().(*logsView); ok && lv.id == msg.id {
+			return m, lv.handleContainers(msg)
+		}
+		return m, nil
+
+	case logLinesMsg:
+		if lv, ok := m.top().(*logsView); ok && lv.id == msg.id {
+			return m, lv.handleLines(msg)
 		}
 		return m, nil
 
@@ -424,6 +456,21 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch {
+		case is(msg, keys.Logs):
+			row, ok := rv.selectedRow()
+			if !ok {
+				return m, nil
+			}
+			if rv.res.GVR != k8s.Pods.GVR {
+				return m, m.setNotice("logs open from a pod; select one in the pods view")
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			rv.stop()
+			m.pushLogs(ns, row.Name)
+			return m, m.startTop()
 		case is(msg, keys.Sort):
 			if len(rv.snapshot.Columns) == 0 {
 				return m, nil
@@ -451,6 +498,28 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if ov, ok := top.(*objectView); ok && is(msg, keys.Reload) {
 		return m, ov.start(m.deps)
+	}
+	if lv, ok := top.(*logsView); ok {
+		switch {
+		case is(msg, keys.LogContainer):
+			if len(lv.containers) == 0 {
+				return m, nil
+			}
+			cmd := m.palette.showWith(containerItems(lv.containers, lv.selected), "container")
+			lv.resize(m.width, m.bodyHeight())
+			return m, cmd
+		case is(msg, keys.LogSince):
+			cmd := m.palette.showWith(sinceItems(lv.opts.Since), "since")
+			lv.resize(m.width, m.bodyHeight())
+			return m, cmd
+		case is(msg, keys.LogSave):
+			path, err := lv.save()
+			if err != nil {
+				m.err = err
+				return m, nil
+			}
+			return m, m.setNotice("saved " + path)
+		}
 	}
 
 	// The view gets first refusal (a table uses esc to clear its filter).
@@ -528,6 +597,16 @@ func (m Model) helpSections() []ui.HelpSection {
 // choose acts on a palette selection.
 func (m *Model) choose(it paletteItem) tea.Cmd {
 	switch it.Kind {
+	case itemContainer:
+		if lv, ok := m.top().(*logsView); ok {
+			return lv.setContainer(it.Name)
+		}
+		return nil
+	case itemSince:
+		if lv, ok := m.top().(*logsView); ok {
+			return lv.setSince(it.Since)
+		}
+		return nil
 	case itemAction:
 		switch it.Name {
 		case actionQuit:
@@ -612,7 +691,7 @@ func (m *Model) useClient(c *k8s.Client) tea.Cmd {
 		v.stop()
 	}
 	m.client = c
-	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c}
+	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c, logs: c}
 	m.namespace = c.Namespace
 	m.resources, m.namespaces = nil, nil
 	m.serverVersion = ""

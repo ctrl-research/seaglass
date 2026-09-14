@@ -153,8 +153,9 @@ edit need bespoke code. This avoids writing the actions twice.
 - [x] Delete with confirm dialog (`ctrl+d`). Force/grace options later.
 - [x] Scale for Deployments/StatefulSets/ReplicaSets via a generic prompt
   line (`=`, prefilled from the table's Ready/Desired cell) and `+`/`-`.
-- [ ] Logs (`l`): follow, container picker or merged multi-container view,
-  `--since`, timestamps toggle, regex filter, wrap toggle, save to file.
+- [x] Logs (`l`): follow with pause on scroll, containers merged by server
+  timestamp with a picker, since window, timestamps toggle, regex filter
+  with highlight, wrap toggle, save to file. Previous-container logs later.
 - [ ] Exec shell into a container via `tea.ExecProcess`.
 - [ ] Edit in `$EDITOR` (`e`) with server-side apply and a diff-on-conflict
   message.

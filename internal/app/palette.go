@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -21,6 +22,8 @@ const (
 	itemContext
 	itemSort
 	itemAction
+	itemContainer
+	itemSince
 )
 
 func (k itemKind) String() string {
@@ -33,6 +36,10 @@ func (k itemKind) String() string {
 		return "column"
 	case itemAction:
 		return "action"
+	case itemContainer:
+		return "container"
+	case itemSince:
+		return "since"
 	default:
 		return "context"
 	}
@@ -52,6 +59,7 @@ type paletteItem struct {
 	Resource k8s.Resource // when Kind == itemResource
 	Name     string       // namespace or context name
 	Index    int          // column index when Kind == itemSort
+	Since    time.Duration
 	search   string
 }
 
@@ -293,4 +301,33 @@ func (p *palette) view(width int) string {
 		lines = append(lines, row)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// containerItems builds the container picker for a logs view.
+func containerItems(containers []string, selected string) []paletteItem {
+	items := []paletteItem{{Kind: itemContainer, Label: "all containers", Detail: "merged, ordered by time", Name: "", search: "all containers merged"}}
+	for _, c := range containers {
+		detail := "container"
+		if c == selected {
+			detail = "current"
+		}
+		items = append(items, paletteItem{Kind: itemContainer, Label: c, Detail: detail, Name: c, search: strings.ToLower(c + " container")})
+	}
+	return items
+}
+
+// sinceItems builds the time window picker for a logs view.
+func sinceItems(current time.Duration) []paletteItem {
+	items := make([]paletteItem, 0, len(sinceChoices))
+	for _, c := range sinceChoices {
+		detail := "show lines from the last " + c.label
+		if c.d == 0 {
+			detail = "no time limit (last " + fmt.Sprint(defaultTail) + " lines per container)"
+		}
+		if c.d == current {
+			detail += " · current"
+		}
+		items = append(items, paletteItem{Kind: itemSince, Label: c.label, Detail: detail, Since: c.d, search: strings.ToLower(c.label + " since " + detail)})
+	}
+	return items
 }
