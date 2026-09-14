@@ -55,6 +55,7 @@ type Model struct {
 
 	connecting string // context name while switching, "" otherwise
 	err        error
+	showHelp   bool
 
 	version       string // seaglass version
 	serverVersion string // fetched from /version
@@ -322,7 +323,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	slog.Debug("key", "key", msg.String(), "palette", m.palette.open, "stack", len(m.stack))
+	slog.Debug("key", "key", msg.String(), "palette", m.palette.open, "help", m.showHelp, "stack", len(m.stack))
+	if m.showHelp {
+		if is(msg, keys.Help) || is(msg, keys.Back) || is(msg, keys.Quit) {
+			m.showHelp = false
+		}
+		return m, nil
+	}
 	if m.palette.open {
 		chosen, closed, cmd := m.palette.update(msg)
 		if closed {
@@ -340,35 +347,38 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	switch msg.String() {
-	case "ctrl+c", "q":
+	switch {
+	case is(msg, keys.Quit):
 		for _, v := range m.stack {
 			v.stop()
 		}
 		return m, tea.Quit
-	case ":", "ctrl+p":
+	case is(msg, keys.Palette):
 		cmd := m.palette.show()
 		top.resize(m.width, m.bodyHeight())
 		return m, cmd
+	case is(msg, keys.Help):
+		m.showHelp = true
+		return m, nil
 	}
 
 	// Drill into the selected row of a table view.
 	if rv, ok := top.(*resourceView); ok {
-		switch msg.String() {
-		case "s":
+		switch {
+		case is(msg, keys.Sort):
 			if len(rv.snapshot.Columns) == 0 {
 				return m, nil
 			}
 			cmd := m.palette.showWith(sortItems(rv.snapshot.Columns, rv.sortCol), "sort by column")
 			rv.resize(m.width, m.bodyHeight())
 			return m, cmd
-		case "enter", "d", "y":
+		case is(msg, keys.Detail), is(msg, keys.YAML):
 			row, ok := rv.selectedRow()
 			if !ok {
 				return m, nil
 			}
 			mode := modeDetail
-			if msg.String() == "y" {
+			if is(msg, keys.YAML) {
 				mode = modeYAML
 			}
 			ns := row.Namespace
@@ -380,7 +390,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.startTop()
 		}
 	}
-	if ov, ok := top.(*objectView); ok && msg.String() == "r" {
+	if ov, ok := top.(*objectView); ok && is(msg, keys.Reload) {
 		return m, ov.start(m.deps)
 	}
 
@@ -389,13 +399,25 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if consumed {
 		return m, cmd
 	}
-	if msg.String() == "esc" {
+	if is(msg, keys.Back) {
 		if len(m.stack) > 1 {
 			return m, m.pop()
 		}
 		m.err = nil
 	}
 	return m, nil
+}
+
+// helpSections assembles the overlay: global, then the top view's, then
+// the palette's.
+func (m Model) helpSections() []ui.HelpSection {
+	secs := append([]helpSection{globalHelp()}, m.top().help()...)
+	secs = append(secs, paletteHelp())
+	out := make([]ui.HelpSection, len(secs))
+	for i, s := range secs {
+		out[i] = ui.HelpSection{Title: s.title, Bindings: s.bindings}
+	}
+	return out
 }
 
 // choose acts on a palette selection.
@@ -526,7 +548,13 @@ func (m Model) View() tea.View {
 	if m.palette.open {
 		parts = append(parts, m.palette.view(m.width))
 	}
-	parts = append(parts, top.render(m.width, m.bodyHeight()), bar.Render(m.width))
+	if m.showHelp {
+		bar.Hint, bar.Back = "? or esc closes help", ""
+		parts = append(parts, ui.RenderHelp(m.helpSections(), m.width, m.bodyHeight()))
+	} else {
+		parts = append(parts, top.render(m.width, m.bodyHeight()))
+	}
+	parts = append(parts, bar.Render(m.width))
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, parts...))
 	if m.client != nil {
 		v.WindowTitle = "seaglass · " + m.client.Context

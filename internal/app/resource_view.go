@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -284,26 +285,36 @@ func (v *resourceView) status() viewStatus {
 }
 
 func (v *resourceView) hint() string {
-	return ": palette  / filter  s sort  w columns"
+	return ": palette  / filter  s sort  ? keys"
+}
+
+func (v *resourceView) help() []helpSection {
+	km := v.table.KeyMap
+	return []helpSection{
+		{"Table", []key.Binding{keys.Filter, keys.Sort, keys.Reverse, keys.Columns, keys.Detail, keys.YAML}},
+		{"Move", []key.Binding{km.LineUp, km.LineDown, km.PageUp, km.PageDown, km.HalfPageUp, km.HalfPageDown, km.GotoTop, km.GotoBottom}},
+	}
 }
 
 // handleKey handles a key. consumed is false when the key was not
 // meaningful to the view and the caller may treat it as global.
 func (v *resourceView) handleKey(msg tea.KeyPressMsg, width, height int) (cmd tea.Cmd, consumed bool) {
 	if v.typing {
-		switch msg.String() {
-		case "esc":
+		switch {
+		case is(msg, keys.Back):
 			v.clearFilter()
 			v.refilter(width, height)
 			return nil, true
-		case "enter":
+		case is(msg, keys.Accept):
 			v.typing = false
 			v.filter.Blur()
 			if v.filter.Value() == "" {
 				v.layout(width, height, v.selectedKey())
 			}
 			return nil, true
-		case "up", "down", "pgup", "pgdown", "ctrl+n", "ctrl+p":
+		// Only unambiguous movement keys pass through while typing; the
+		// table's own bindings include letters and space.
+		case is(msg, keys.Up), is(msg, keys.Down), is(msg, keys.PageUp), is(msg, keys.PageDown):
 			v.table, cmd = v.table.Update(msg)
 			return cmd, true
 		}
@@ -315,22 +326,22 @@ func (v *resourceView) handleKey(msg tea.KeyPressMsg, width, height int) (cmd te
 		return cmd, true
 	}
 
-	switch msg.String() {
-	case "/":
+	switch {
+	case is(msg, keys.Filter):
 		cmd = v.startFilter()
 		v.layout(width, height, v.selectedKey())
 		return cmd, true
-	case "S":
+	case is(msg, keys.Reverse):
 		if v.sortCol >= 0 {
 			v.sortDesc = !v.sortDesc
 			v.refilter(width, height)
 		}
 		return nil, true
-	case "w":
+	case is(msg, keys.Columns):
 		v.colMode = v.colMode.Next()
 		v.layout(width, height, v.selectedKey())
 		return nil, true
-	case "esc":
+	case is(msg, keys.Back):
 		if v.filter.Value() != "" {
 			v.clearFilter()
 			v.refilter(width, height)

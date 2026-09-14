@@ -57,6 +57,8 @@ type view interface {
 	status() viewStatus
 	// hint is the key help shown in the status bar.
 	hint() string
+	// help lists the view's bindings for the help overlay.
+	help() []helpSection
 	// capturesInput is true while a text input has focus, so global keys
 	// like q are typed rather than executed.
 	capturesInput() bool

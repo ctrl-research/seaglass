@@ -38,6 +38,7 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | In detail/YAML: `y`/`d` switch, `c` copy YAML, `r` reload, `g`/`G` top/bottom |
 | `esc` | Clear the filter, close the palette, or go back one view |
 | `j`/`k`, arrows, `pgup`/`pgdn`, `g`/`G` | Move in the table |
+| `?` | Help overlay listing every key for the current view |
 | `q` or `ctrl+c` | Quit |
 
 Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
@@ -45,8 +46,9 @@ Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
 choosing a namespace keeps the current resource and resets the view stack;
 choosing a context reconnects.
 
-Status: M1 in progress. Any list+watch resource type, live updates,
-server-side columns, palette, row filter, detail and YAML views.
+Status: M1 feature-complete, in the dogfood week. Any list+watch resource
+type, live updates, server-side columns, palette, row filter, sort, detail
+and YAML views, header, remembered position, help.
 
 ## Driving the TUI headlessly
 

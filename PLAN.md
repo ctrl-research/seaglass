@@ -131,7 +131,8 @@ Gate: I can open it against production and see pods update live.
   info beside it, separated from the table by a single horizontal rule.
   Like k9s but shorter and without borders. Must collapse to one line or
   disappear on short terminals.
-- [ ] Generated help overlay (`?`) from the keymap.
+- [x] Generated help overlay (`?`) from the keymap. All handlers match on
+  `key.Binding`s in one keymap, so help cannot drift and M5 can override.
 - [x] Persist last context/namespace/resource between runs (state.json in
   the state dir; flags override).
 

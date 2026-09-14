@@ -105,7 +105,7 @@ func snap() k8s.Snapshot {
 	}
 }
 
-func key(s string) tea.KeyPressMsg {
+func kp(s string) tea.KeyPressMsg {
 	switch s {
 	case "esc":
 		return tea.KeyPressMsg{Code: tea.KeyEscape}
@@ -124,7 +124,7 @@ func press(m Model, keys ...string) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	for _, k := range keys {
 		var mm tea.Model
-		mm, cmd = m.Update(key(k))
+		mm, cmd = m.Update(kp(k))
 		m = mm.(Model)
 	}
 	return m, cmd
@@ -599,16 +599,16 @@ func TestPersistsPositionChanges(t *testing.T) {
 	}
 	run(resourcesMsg{resources: []k8s.Resource{k8s.Pods, deployments}})
 	run(namespacesMsg{names: []string{"default", "kube-system"}})
-	run(key("j")) // cursor moves must not save
+	run(kp("j")) // cursor moves must not save
 	if store.saves != 1 {
 		t.Errorf("unrelated updates saved state: %d", store.saves)
 	}
 
-	run(key(":"))
+	run(kp(":"))
 	for _, r := range "ns kube-sys" {
-		run(key(string(r)))
+		run(kp(string(r)))
 	}
-	run(key("enter"))
+	run(kp("enter"))
 	if store.saves != 2 {
 		t.Fatalf("namespace change should save, got %d saves", store.saves)
 	}
@@ -617,17 +617,17 @@ func TestPersistsPositionChanges(t *testing.T) {
 		t.Errorf("saved %+v", cs)
 	}
 
-	run(key(":"))
+	run(kp(":"))
 	for _, r := range "deploy" {
-		run(key(string(r)))
+		run(kp(string(r)))
 	}
-	run(key("enter"))
+	run(kp("enter"))
 	cs, _ = store.st.For("test-ctx")
 	if store.saves != 3 || cs.Resource.GVR.Resource != "deployments" {
 		t.Errorf("resource change: saves=%d resource=%+v", store.saves, cs.Resource)
 	}
 
-	run(key("esc")) // back to pods
+	run(kp("esc")) // back to pods
 	cs, _ = store.st.For("test-ctx")
 	if store.saves != 4 || cs.Resource.GVR.Resource != "pods" {
 		t.Errorf("pop should save the resumed resource: saves=%d resource=%+v", store.saves, cs.Resource)
@@ -730,5 +730,46 @@ func TestColumnModeCycle(t *testing.T) {
 	m, _ = press(m, "w")
 	if rv(m).colMode != 0 {
 		t.Error("third w should return to auto")
+	}
+}
+
+func TestHelpOverlay(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "?")
+	if !m.showHelp {
+		t.Fatal("? should open help")
+	}
+	out := stripANSI(m.View().Content)
+	for _, want := range []string{"Global", "command palette", "Table", "sort by column", "cycle columns", "Move", "Palette / filter", "press ? or esc to close"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Running") {
+		t.Error("table should be hidden behind help")
+	}
+	if lines := strings.Count(out, "\n") + 1; lines != 24 {
+		t.Errorf("view has %d lines, want 24", lines)
+	}
+	// q closes help rather than quitting.
+	m, cmd := press(m, "q")
+	if m.showHelp || cmd != nil {
+		t.Error("q should close help without quitting")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "Running") {
+		t.Error("table should return after help closes")
+	}
+	// Help on an object view shows object bindings.
+	m, _ = press(m, "enter")
+	m = openObject(m)
+	m, _ = press(m, "?")
+	out = stripANSI(m.View().Content)
+	if !strings.Contains(out, "Object") || !strings.Contains(out, "copy yaml") || !strings.Contains(out, "Scroll") {
+		t.Errorf("object help missing:\n%s", out)
+	}
+	m, _ = press(m, "esc")
+	if m.showHelp || len(m.stack) != 2 {
+		t.Error("esc should close help, not pop the view")
 	}
 }

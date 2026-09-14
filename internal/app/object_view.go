@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -107,34 +108,42 @@ func (v *objectView) resize(width, height int) {
 }
 
 func (v *objectView) handleKey(msg tea.KeyPressMsg, width, height int) (tea.Cmd, bool) {
-	switch msg.String() {
-	case "y":
+	switch {
+	case is(msg, keys.ModeYAML):
 		v.mode = modeYAML
 		v.vp.GotoTop()
 		v.refresh()
 		return nil, true
-	case "d":
+	case is(msg, keys.ModeDetail):
 		v.mode = modeDetail
 		v.vp.GotoTop()
 		v.refresh()
 		return nil, true
-	case "c":
+	case is(msg, keys.Copy):
 		if v.yaml != "" {
 			return tea.SetClipboard(v.yaml), true
 		}
 		return nil, true
-	case "g":
+	case is(msg, keys.Top):
 		v.vp.GotoTop()
 		return nil, true
-	case "G":
+	case is(msg, keys.Bottom):
 		v.vp.GotoBottom()
 		return nil, true
-	case "esc":
+	case is(msg, keys.Back):
 		return nil, false
 	}
 	var cmd tea.Cmd
 	v.vp, cmd = v.vp.Update(msg)
 	return cmd, true
+}
+
+func (v *objectView) help() []helpSection {
+	km := v.vp.KeyMap
+	return []helpSection{
+		{"Object", []key.Binding{keys.ModeYAML, keys.ModeDetail, keys.Copy, keys.Reload, keys.Top, keys.Bottom}},
+		{"Scroll", []key.Binding{km.Up, km.Down, km.PageUp, km.PageDown, km.HalfPageUp, km.HalfPageDown}},
+	}
 }
 
 func (v *objectView) render(width, height int) string {
@@ -166,5 +175,5 @@ func (v *objectView) status() viewStatus {
 }
 
 func (v *objectView) hint() string {
-	return "y yaml  d detail  c copy"
+	return "y yaml  d detail  c copy  ? keys"
 }

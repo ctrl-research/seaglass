@@ -190,21 +190,21 @@ func (p *palette) selected() (paletteItem, bool) {
 // update handles a key while open. It returns the chosen item when the user
 // pressed enter, and closed=true when the palette should be dismissed.
 func (p *palette) update(msg tea.KeyPressMsg) (chosen *paletteItem, closed bool, cmd tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	switch {
+	case is(msg, keys.Back):
 		p.hide()
 		return nil, true, nil
-	case "enter":
+	case is(msg, keys.Accept):
 		if it, ok := p.selected(); ok {
 			p.hide()
 			return &it, true, nil
 		}
 		return nil, false, nil
-	case "up", "ctrl+p", "ctrl+k":
+	case is(msg, keys.Up):
 		p.cursor--
 		p.clampCursor()
 		return nil, false, nil
-	case "down", "ctrl+n", "ctrl+j":
+	case is(msg, keys.Down):
 		p.cursor++
 		p.clampCursor()
 		return nil, false, nil
