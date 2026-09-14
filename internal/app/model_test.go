@@ -946,3 +946,125 @@ func TestPaletteListsActionsForSelection(t *testing.T) {
 		t.Error("help should list actions for the resource")
 	}
 }
+
+func deploySnap() k8s.Snapshot {
+	return k8s.Snapshot{
+		Columns: []k8s.Column{{Name: "Name"}, {Name: "Ready"}, {Name: "Up-to-date"}},
+		Rows:    []k8s.Row{{Name: "web", Namespace: "default", UID: "w", Cells: []string{"web", "3/3", "3"}}},
+	}
+}
+
+func onDeployments(t *testing.T) Model {
+	t.Helper()
+	m, _ := newTest(t)
+	m, _ = press(m, ":")
+	m = typeStr(m, "deploy")
+	m, _ = press(m, "enter")
+	return feed(m, k8s.Update{Snapshot: deploySnap(), Status: k8s.StatusLive})
+}
+
+func TestScalePromptDefaultsAndPatches(t *testing.T) {
+	m := onDeployments(t)
+	m, _ = press(m, "=")
+	if !m.prompt.open || m.prompt.input.Value() != "3" {
+		t.Fatalf("scale should prompt with the desired count: open=%v value=%q", m.prompt.open, m.prompt.input.Value())
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "scale Deployment default/web") || !strings.Contains(out, "replicas:") {
+		t.Errorf("prompt line missing:\n%s", out)
+	}
+	if lines := strings.Count(out, "\n") + 1; lines != 24 {
+		t.Errorf("view has %d lines with prompt, want 24", lines)
+	}
+	// Typing q must not quit while the prompt is open; clear and type 5.
+	mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = mm.(Model)
+	m = typeStr(m, "x")
+	m, cmd := press(m, "enter")
+	if cmd != nil || !m.prompt.open || m.prompt.errText == "" {
+		t.Fatal("invalid replicas should keep the prompt open with an error")
+	}
+	mm, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = mm.(Model)
+	m = typeStr(m, "5")
+	m, cmd = press(m, "enter")
+	if m.prompt.open || cmd == nil {
+		t.Fatal("valid input should close the prompt and run")
+	}
+	execCmdInto(&m, cmd)
+	if len(fp(m).patches) != 1 || !strings.HasSuffix(fp(m).patches[0], `{"spec":{"replicas":5}}`) {
+		t.Errorf("patches = %v", fp(m).patches)
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "scale Deployment default/web to 5 replicas") {
+		t.Errorf("notice missing:\n%s", stripANSI(m.View().Content))
+	}
+}
+
+func TestScaleUpDownFromTable(t *testing.T) {
+	m := onDeployments(t)
+	m, cmd := press(m, "+")
+	execCmdInto(&m, cmd)
+	m, cmd = press(m, "-")
+	execCmdInto(&m, cmd)
+	if len(fp(m).patches) != 2 || !strings.HasSuffix(fp(m).patches[0], `{"spec":{"replicas":4}}`) || !strings.HasSuffix(fp(m).patches[1], `{"spec":{"replicas":2}}`) {
+		t.Errorf("patches = %v", fp(m).patches)
+	}
+	// Without a readable desired count, +/- report an error instead.
+	sn := deploySnap()
+	sn.Columns = []k8s.Column{{Name: "Name"}}
+	sn.Rows[0].Cells = []string{"web"}
+	m = feed(m, k8s.Update{Snapshot: sn, Status: k8s.StatusLive})
+	m, cmd = press(m, "+")
+	execCmdInto(&m, cmd)
+	if m.err == nil || !strings.Contains(m.err.Error(), "desired replicas") {
+		t.Errorf("expected a readable error, got %v", m.err)
+	}
+	if len(fp(m).patches) != 2 {
+		t.Error("no patch should be sent without a desired count")
+	}
+}
+
+func TestScalePromptEscCancels(t *testing.T) {
+	m := onDeployments(t)
+	m, _ = press(m, "=")
+	m, _ = press(m, "esc")
+	if m.prompt.open || len(m.stack) != 2 || len(fp(m).patches) != 0 {
+		t.Error("esc should cancel the prompt only")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "3/3") {
+		t.Error("table should be back after cancel")
+	}
+}
+
+func TestPodsDoNotOfferScale(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "=")
+	if cmd != nil || m.prompt.open {
+		t.Error("= on a pod must do nothing")
+	}
+}
+
+// execCmdInto runs a cmd (expanding batches) and feeds resulting messages
+// back into the model.
+func execCmdInto(m *Model, cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	select {
+	case msg := <-done:
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, c := range batch {
+				execCmdInto(m, c)
+			}
+			return
+		}
+		if msg != nil {
+			mm, _ := m.Update(msg)
+			*m = mm.(Model)
+		}
+	case <-time.After(200 * time.Millisecond):
+	}
+}

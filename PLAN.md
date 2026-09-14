@@ -151,8 +151,8 @@ edit need bespoke code. This avoids writing the actions twice.
 - [x] Rollout restart (`r`) as a patch action on Deployments,
   StatefulSets, DaemonSets.
 - [x] Delete with confirm dialog (`ctrl+d`). Force/grace options later.
-- [ ] Scale for Deployments/StatefulSets/ReplicaSets: first action that
-  needs an input prompt.
+- [x] Scale for Deployments/StatefulSets/ReplicaSets via a generic prompt
+  line (`=`, prefilled from the table's Ready/Desired cell) and `+`/`-`.
 - [ ] Logs (`l`): follow, container picker or merged multi-container view,
   `--since`, timestamps toggle, regex filter, wrap toggle, save to file.
 - [ ] Exec shell into a container via `tea.ExecProcess`.

@@ -60,6 +60,7 @@ type Model struct {
 	err        error
 	showHelp   bool
 	confirm    *pendingAction
+	prompt     prompt
 	notice     string
 	noticeSeq  int
 
@@ -104,6 +105,7 @@ func New(opts Options) Model {
 		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher},
 		namespace: opts.Namespace,
 		palette:   newPalette(),
+		prompt:    newPrompt(),
 		contexts:  opts.contexts,
 		version:   opts.Version,
 		state:     opts.State,
@@ -224,7 +226,7 @@ func (m Model) headerHeight() int {
 
 // bodyHeight is the height available to the top view.
 func (m Model) bodyHeight() int {
-	return max(m.height-1-m.headerHeight()-m.palette.height(), 1)
+	return max(m.height-1-m.headerHeight()-m.palette.height()-m.prompt.height(), 1)
 }
 
 func (m *Model) rebuildPalette() {
@@ -358,11 +360,22 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "y", "Y":
 			p := *m.confirm
 			m.confirm = nil
-			return m, runAction(m.deps.patch, p.act, p.tgt, p.row)
+			return m, runAction(m.deps.patch, p.act, p.tgt, actionArgs{cols: p.cols, row: p.row})
 		case "n", "N", "esc", "q", "ctrl+c":
 			m.confirm = nil
 		}
 		return m, nil
+	}
+	if m.prompt.open {
+		value, submitted, closed, cmd := m.prompt.update(msg)
+		if closed {
+			m.top().resize(m.width, m.bodyHeight())
+		}
+		if submitted {
+			p := m.prompt.pending
+			return m, tea.Batch(cmd, runAction(m.deps.patch, p.act, p.tgt, actionArgs{cols: p.cols, row: p.row, input: value}))
+		}
+		return m, cmd
 	}
 	m.err = nil
 	if m.palette.open {
@@ -466,11 +479,21 @@ func (m *Model) trigger(a action, rv *resourceView) tea.Cmd {
 		ns = rv.namespace
 	}
 	tgt := target{res: rv.res, namespace: ns, name: row.Name}
+	pa := pendingAction{act: a, tgt: tgt, cols: rv.snapshot.Columns, row: row}
+	if a.Input != nil {
+		initial := ""
+		if a.Input.Default != nil {
+			initial = a.Input.Default(rv.snapshot.Columns, row)
+		}
+		cmd := m.prompt.show(pa, initial)
+		rv.resize(m.width, m.bodyHeight())
+		return cmd
+	}
 	if a.Confirm {
-		m.confirm = &pendingAction{act: a, tgt: tgt, row: row}
+		m.confirm = &pa
 		return nil
 	}
-	return runAction(m.deps.patch, a, tgt, row)
+	return runAction(m.deps.patch, a, tgt, actionArgs{cols: rv.snapshot.Columns, row: row})
 }
 
 // setNotice shows a transient success message for a few seconds.
@@ -650,6 +673,9 @@ func (m Model) View() tea.View {
 	}
 	if m.palette.open {
 		parts = append(parts, m.palette.view(m.width))
+	}
+	if m.prompt.open {
+		parts = append(parts, m.prompt.view(m.width))
 	}
 	switch {
 	case m.confirm != nil:
