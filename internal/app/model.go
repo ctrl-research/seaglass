@@ -365,7 +365,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case shellExitMsg:
 		if sv, ok := m.top().(*shellView); ok && sv.id == msg.id {
-			sv.handleExit(msg)
+			if clean := sv.handleExit(msg); clean {
+				// Return to the view beneath the shell automatically.
+				summary := "shell closed: " + sv.namespace + "/" + sv.pod + " [" + sv.container + "]"
+				return m, tea.Batch(m.pop(), m.setNotice(summary))
+			}
+			// A real failure stays on screen until esc.
 		}
 		return m, nil
 

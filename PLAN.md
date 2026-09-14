@@ -162,6 +162,8 @@ edit need bespoke code. This avoids writing the actions twice.
   embedded terminal emulator so header and status bar stay visible;
   crumbs name the pod and container, the status bar the remote user.
   Resize forwarding, bash-or-sh, container picker, `ctrl+]` closes.
+  A clean exit (shell exit or `ctrl+]`) returns to the table automatically
+  with a notice; a real error (no shell in image) stays until esc.
 - [ ] Edit in `$EDITOR` (`e`) with server-side apply and a diff-on-conflict
   message.
 - [ ] Port-forward with an active-forwards panel and cancel.

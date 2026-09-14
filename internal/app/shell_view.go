@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -59,9 +60,10 @@ type shellView struct {
 	sizes  *sizeQueue
 	cancel context.CancelFunc
 
-	started bool
-	done    bool
-	err     error
+	started    bool
+	done       bool
+	userClosed bool
+	err        error
 
 	width, height int
 }
@@ -152,15 +154,24 @@ func (v *shellView) handleOutput(msg shellOutputMsg) tea.Cmd {
 	return v.wait()
 }
 
-func (v *shellView) handleExit(msg shellExitMsg) {
+// handleExit records the end of the session and reports whether it closed
+// cleanly (so the caller returns to the previous view) or failed (so the
+// view stays visible with the error).
+func (v *shellView) handleExit(msg shellExitMsg) (clean bool) {
 	v.done = true
-	v.err = msg.err
 	if v.sizes != nil {
 		v.sizes.stop()
 	}
 	if v.cancel != nil {
 		v.cancel()
 	}
+	// A user-initiated close cancels the context, surfacing as a
+	// cancellation error; that is not a failure.
+	if v.userClosed || msg.err == nil || errors.Is(msg.err, context.Canceled) {
+		return true
+	}
+	v.err = msg.err
+	return false
 }
 
 func (v *shellView) resize(width, height int) {
@@ -180,6 +191,7 @@ func (v *shellView) handleKey(msg tea.KeyPressMsg, _, _ int) (tea.Cmd, bool) {
 		return nil, false
 	}
 	if is(msg, keys.ShellClose) {
+		v.userClosed = true
 		v.stop()
 		return nil, true
 	}

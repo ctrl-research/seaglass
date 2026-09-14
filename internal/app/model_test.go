@@ -1416,6 +1416,32 @@ func pumpUntilDone(t *testing.T, m *Model) {
 	}
 }
 
+// pumpUntilExit pumps the shell's wait loop until the shell view is gone
+// (clean exit auto-pops) or reports done (error keeps it), running any
+// command the exit produces.
+func pumpUntilExit(t *testing.T, m *Model) {
+	t.Helper()
+	for i := 0; i < 12; i++ {
+		sv, ok := m.top().(*shellView)
+		if !ok {
+			return // popped back
+		}
+		got := make(chan tea.Msg, 1)
+		go func() { got <- sv.wait()() }()
+		select {
+		case msg := <-got:
+			mm, cmd := m.Update(msg)
+			*m = mm.(Model)
+			execCmdInto(m, cmd)
+		case <-time.After(3 * time.Second):
+			t.Fatal("no shell output or exit arrived")
+		}
+		if _, still := m.top().(*shellView); !still {
+			return
+		}
+	}
+}
+
 // shellText is the emulator screen, ANSI stripped and trailing space trimmed.
 func shellText(m Model) string {
 	sv := m.top().(*shellView)
@@ -1489,17 +1515,16 @@ func TestShellPicksContainerThenEmbeds(t *testing.T) {
 		pumpOnce(t, &m)
 	}
 	m, _ = press(m, "enter")
-	pumpUntilDone(t, &m)
-	if !m.top().(*shellView).done {
-		t.Fatal("exit should end the session")
+	pumpUntilExit(t, &m)
+	if _, ok := m.top().(*resourceView); !ok {
+		t.Fatalf("clean exit should auto-return to the table, top = %T", m.top())
 	}
 	out = stripANSI(m.View().Content)
-	if !strings.Contains(out, "shell exited") || !strings.Contains(out, "exited · user root") {
-		t.Errorf("exited state missing:\n%s", out)
+	if !strings.Contains(out, "shell closed: default/b [sidecar]") {
+		t.Errorf("close notice missing:\n%s", out)
 	}
-	m, _ = press(m, "esc")
-	if _, ok := m.top().(*resourceView); !ok {
-		t.Error("esc after exit should return to the table")
+	if rv(m).selectedKey() != "2" {
+		t.Error("selection should be preserved on return")
 	}
 }
 
@@ -1515,9 +1540,9 @@ func TestShellCloseKey(t *testing.T) {
 	}
 	runShellCmd(&m, cmd)
 	m, _ = press(m, "ctrl+]")
-	pumpUntilDone(t, &m)
-	if !m.top().(*shellView).done {
-		t.Error("ctrl+] should end the session")
+	pumpUntilExit(t, &m)
+	if _, ok := m.top().(*resourceView); !ok {
+		t.Errorf("ctrl+] should close the shell and return to the table, top = %T", m.top())
 	}
 }
 
@@ -1550,9 +1575,19 @@ func TestShellErrorShown(t *testing.T) {
 	m = mm.(Model)
 	runShellCmd(&m, cmd)
 	sv := m.top().(*shellView)
-	mm, _ = m.Update(shellExitMsg{id: sv.id, err: errors.New("executable file not found")})
+	mm, cmd = m.Update(shellExitMsg{id: sv.id, err: errors.New("executable file not found")})
 	m = mm.(Model)
+	if cmd != nil {
+		t.Error("a real error must not auto-pop the shell")
+	}
+	if _, ok := m.top().(*shellView); !ok {
+		t.Fatal("error should keep the shell view visible")
+	}
 	if !strings.Contains(stripANSI(m.View().Content), "executable file not found") {
 		t.Error("exec error should show in the body")
+	}
+	m, _ = press(m, "esc")
+	if _, ok := m.top().(*resourceView); !ok {
+		t.Error("esc after an error should return to the table")
 	}
 }
