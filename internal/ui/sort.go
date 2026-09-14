@@ -69,7 +69,7 @@ func parseHumanDuration(s string) (int64, bool) {
 	}
 	mult := []int64{365 * 86400, 86400, 3600, 60, 1}
 	var total int64
-	any := false
+	seen := false
 	for i, part := range m[1:] {
 		if part == "" {
 			continue
@@ -79,9 +79,9 @@ func parseHumanDuration(s string) (int64, bool) {
 			return 0, false
 		}
 		total += n * mult[i]
-		any = true
+		seen = true
 	}
-	return total, any
+	return total, seen
 }
 
 func leadingNumber(s string) (float64, bool) {

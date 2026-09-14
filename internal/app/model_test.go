@@ -1244,7 +1244,7 @@ func TestLogsOpenMergeAndToggles(t *testing.T) {
 	)
 	out = stripANSI(m.View().Content)
 	i1, i2, i3 := strings.Index(out, "GET /healthz"), strings.Index(out, "proxy ready"), strings.Index(out, "GET /users")
-	if !(i1 < i2 && i2 < i3) || i1 < 0 {
+	if i1 < 0 || i1 >= i2 || i2 >= i3 {
 		t.Errorf("lines not merged by time:\n%s", out)
 	}
 	if !strings.Contains(out, "app     GET /healthz") || !strings.Contains(out, "sidecar proxy ready") {
@@ -1408,14 +1408,6 @@ func pumpOnce(t *testing.T, m *Model) {
 	}
 }
 
-// pumpUntilDone pumps until the session reports exit.
-func pumpUntilDone(t *testing.T, m *Model) {
-	t.Helper()
-	for i := 0; i < 10 && !m.top().(*shellView).done; i++ {
-		pumpOnce(t, m)
-	}
-}
-
 // pumpUntilExit pumps the shell's wait loop until the shell view is gone
 // (clean exit auto-pops) or reports done (error keeps it), running any
 // command the exit produces.
@@ -1460,7 +1452,7 @@ func TestShellPicksContainerThenEmbeds(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("x should fetch containers")
 	}
-	mm, cmd := m.Update(cmd())
+	mm, _ := m.Update(cmd())
 	m = mm.(Model)
 	if !m.palette.open || m.execTarget == nil {
 		t.Fatal("two containers should open a picker")

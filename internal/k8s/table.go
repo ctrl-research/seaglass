@@ -63,9 +63,13 @@ type Update struct {
 type Status int
 
 const (
+	// StatusConnecting means the initial list is in flight.
 	StatusConnecting Status = iota
+	// StatusLive means the watch is established and rows are current.
 	StatusLive
+	// StatusReconnecting means the watch dropped and is being reestablished.
 	StatusReconnecting
+	// StatusError means the last list or watch failed.
 	StatusError
 )
 
