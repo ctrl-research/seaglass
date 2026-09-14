@@ -103,6 +103,7 @@ func run() error {
 		Resource:  res,
 		Version:   version,
 		State:     store,
+		SaveDir:   ".",
 	})
 	_, err = tea.NewProgram(m).Run()
 	return err

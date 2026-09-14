@@ -34,14 +34,19 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | `s` | Sort by a column (pick from the palette); choose the same column again or press `S` to reverse |
 | `w` | Cycle columns: auto (fit to width), wide (all), narrow (essentials) |
 | `enter` or `d` | Detail view of the selected object: metadata, status, conditions, containers |
+| `l` | Logs of the selected pod, all containers merged by time, following |
+| In logs: `c` container, `s` since window, `t` timestamps, `w` wrap, `f` follow, `/` regex filter, `S` save to file |
 | `y` | YAML of the selected object, managed fields stripped |
 | In detail/YAML: `y`/`d` switch, `c` copy YAML, `r` reload, `g`/`G` top/bottom |
 | `esc` | Clear the filter, close the palette, or go back one view |
 | `j`/`k`, arrows, `pgup`/`pgdn`, `g`/`G` | Move in the table |
-| `r` | Rollout restart the selected Deployment, StatefulSet, or DaemonSet |
+| `r` | Rollout restart the selected Deployment, StatefulSet, or DaemonSet, after a confirm |
 | `=` | Scale the selected Deployment, StatefulSet, or ReplicaSet: prompts for replicas, prefilled from the table |
 | `+` / `-` | Scale by one replica up or down |
-| `ctrl+d` | Delete the selected object, after a confirm |
+| `ctrl+d` | Delete the selected object; `f` in the dialog toggles force (grace period 0) |
+
+Every action that changes the cluster (restart, scale, delete) asks for
+confirmation first: `y` runs it, `n` or `esc` cancels.
 | `?` | Help overlay listing every key for the current view |
 | `q` or `ctrl+c` | Quit |
 

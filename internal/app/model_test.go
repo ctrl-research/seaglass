@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -70,9 +72,30 @@ func (f *fakePatcher) Patch(_ context.Context, res k8s.Resource, ns, name string
 	return &unstructured.Unstructured{}, f.err
 }
 
-func (f *fakePatcher) Delete(_ context.Context, res k8s.Resource, ns, name string, _ *int64) error {
-	f.deletes = append(f.deletes, res.Name()+"/"+ns+"/"+name)
+func (f *fakePatcher) Delete(_ context.Context, res k8s.Resource, ns, name string, grace *int64) error {
+	entry := res.Name() + "/" + ns + "/" + name
+	if grace != nil {
+		entry += fmt.Sprintf(" grace=%d", *grace)
+	}
+	f.deletes = append(f.deletes, entry)
 	return f.err
+}
+
+// fakeLogger hands out channels the test controls, keyed by container.
+type fakeLogger struct {
+	calls []string // "ns/pod/container since=.. tail=.."
+	chans map[string]chan k8s.LogEvent
+}
+
+func (f *fakeLogger) Logs(ctx context.Context, ns, pod, container string, opts k8s.LogOptions) (<-chan k8s.LogEvent, error) {
+	f.calls = append(f.calls, fmt.Sprintf("%s/%s/%s since=%s tail=%d", ns, pod, container, opts.Since, opts.TailLines))
+	if f.chans == nil {
+		f.chans = map[string]chan k8s.LogEvent{}
+	}
+	ch := make(chan k8s.LogEvent, 64)
+	f.chans[container] = ch
+	go func() { <-ctx.Done(); close(ch) }()
+	return ch, nil
 }
 
 // rv asserts the top view is a table view.
@@ -90,15 +113,18 @@ func newTestFull(t *testing.T) (Model, *fakeStreamer, *fakeGetter) {
 	fg := &fakeGetter{obj: &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "Pod",
 		"metadata": map[string]any{"name": "b", "namespace": "default", "uid": "2", "labels": map[string]any{"app": "web"}},
+		"spec":     map[string]any{"containers": []any{map[string]any{"name": "app"}, map[string]any{"name": "sidecar"}}},
 		"status":   map[string]any{"phase": "Pending"},
 	}}}
 	m := New(Options{
 		Client:    &k8s.Client{Context: "test-ctx", Namespace: "default"},
 		Namespace: "default",
 		Resource:  k8s.Pods,
+		SaveDir:   t.TempDir(),
 		streamer:  fs,
 		getter:    fg,
 		patcher:   &fakePatcher{},
+		logger:    &fakeLogger{},
 		contexts:  []string{"test-ctx", "other-ctx"},
 	})
 	// Init returns a batch; run the stream start directly instead so tests
@@ -566,7 +592,7 @@ func TestHeaderShownAndHidden(t *testing.T) {
 	m = mm.(Model)
 	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
 	out := stripANSI(m.View().Content)
-	for _, want := range []string{"┌─┐┌─┐", "context: test-ctx", "namespace: default", "k8s: v1.30.0", "────"} {
+	for _, want := range []string{"/ ___|  ___", "context: test-ctx", "namespace: default", "k8s: v1.30.0", "────"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("header missing %q:\n%s", want, out)
 		}
@@ -582,7 +608,7 @@ func TestHeaderShownAndHidden(t *testing.T) {
 	mm, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
 	m = mm.(Model)
 	out = stripANSI(m.View().Content)
-	if strings.Contains(out, "┌─┐") {
+	if strings.Contains(out, "|___/") {
 		t.Error("header should hide on a short terminal")
 	}
 	if lines := strings.Count(out, "\n") + 1; lines != 12 {
@@ -858,8 +884,15 @@ func TestRestartActionOnDeployment(t *testing.T) {
 		Rows:    []k8s.Row{{Name: "web", Namespace: "default", UID: "w", Cells: []string{"web"}}},
 	}, Status: k8s.StatusLive})
 	m, cmd = press(m, "r")
+	if cmd != nil || m.confirm == nil {
+		t.Fatal("r on a deployment should ask for confirmation")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "rollout restart Deployment default/web?") {
+		t.Errorf("confirm text:\n%s", stripANSI(m.View().Content))
+	}
+	m, cmd = press(m, "y")
 	if cmd == nil {
-		t.Fatal("r on a deployment should run restart")
+		t.Fatal("y should run restart")
 	}
 	m = runResult(m, cmd)
 	if len(fp(m).patches) != 1 || !strings.HasPrefix(fp(m).patches[0], "deployments/default/web: ") {
@@ -888,7 +921,7 @@ func TestDeleteConfirms(t *testing.T) {
 		t.Fatal("delete should ask for confirmation first")
 	}
 	out := stripANSI(m.View().Content)
-	if !strings.Contains(out, "delete object?") || !strings.Contains(out, "Pod default/b") {
+	if !strings.Contains(out, "delete object Pod default/b?") {
 		t.Errorf("confirm dialog missing:\n%s", out)
 	}
 	m, cmd = press(m, "n")
@@ -896,16 +929,41 @@ func TestDeleteConfirms(t *testing.T) {
 		t.Fatal("n should cancel")
 	}
 	m, _ = press(m, "ctrl+d")
+	out = stripANSI(m.View().Content)
+	if !strings.Contains(out, "f force (grace period 0): off") {
+		t.Errorf("force toggle missing:\n%s", out)
+	}
+	m, _ = press(m, "f")
+	if !m.confirm.force || !strings.Contains(stripANSI(m.View().Content), "force (grace period 0): ON") {
+		t.Error("f should turn force on")
+	}
+	m, _ = press(m, "f")
+	if m.confirm.force {
+		t.Error("f again should turn force off")
+	}
+	m, _ = press(m, "f")
 	m, cmd = press(m, "y")
 	if cmd == nil {
 		t.Fatal("y should run the delete")
 	}
 	m = runResult(m, cmd)
-	if len(fp(m).deletes) != 1 || fp(m).deletes[0] != "pods/default/b" {
+	if len(fp(m).deletes) != 1 || fp(m).deletes[0] != "pods/default/b grace=0" {
 		t.Errorf("deletes = %v", fp(m).deletes)
 	}
-	if !strings.Contains(stripANSI(m.View().Content), "deleted Pod default/b") {
+	if !strings.Contains(stripANSI(m.View().Content), "force deleted Pod default/b") {
 		t.Error("notice missing after delete")
+	}
+}
+
+func TestRestartHasNoForceToggle(t *testing.T) {
+	m := onDeployments(t)
+	m, _ = press(m, "r")
+	if strings.Contains(stripANSI(m.View().Content), "force") {
+		t.Error("restart should not offer force")
+	}
+	m, _ = press(m, "f") // ignored
+	if m.confirm == nil || m.confirm.force {
+		t.Error("f must be ignored when the action has no force option")
 	}
 }
 
@@ -987,9 +1045,16 @@ func TestScalePromptDefaultsAndPatches(t *testing.T) {
 	mm, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	m = mm.(Model)
 	m = typeStr(m, "5")
-	m, cmd = press(m, "enter")
-	if m.prompt.open || cmd == nil {
-		t.Fatal("valid input should close the prompt and run")
+	m, _ = press(m, "enter")
+	if m.prompt.open || m.confirm == nil {
+		t.Fatal("valid input should close the prompt and ask for confirmation")
+	}
+	if out := stripANSI(m.View().Content); !strings.Contains(out, "scale Deployment default/web to 5 replicas?") {
+		t.Errorf("confirm text:\n%s", out)
+	}
+	m, cmd = press(m, "y")
+	if cmd == nil {
+		t.Fatal("y should run the scale")
 	}
 	execCmdInto(&m, cmd)
 	if len(fp(m).patches) != 1 || !strings.HasSuffix(fp(m).patches[0], `{"spec":{"replicas":5}}`) {
@@ -1002,9 +1067,11 @@ func TestScalePromptDefaultsAndPatches(t *testing.T) {
 
 func TestScaleUpDownFromTable(t *testing.T) {
 	m := onDeployments(t)
-	m, cmd := press(m, "+")
+	m, _ = press(m, "+")
+	m, cmd := press(m, "y")
 	execCmdInto(&m, cmd)
-	m, cmd = press(m, "-")
+	m, _ = press(m, "-")
+	m, cmd = press(m, "y")
 	execCmdInto(&m, cmd)
 	if len(fp(m).patches) != 2 || !strings.HasSuffix(fp(m).patches[0], `{"spec":{"replicas":4}}`) || !strings.HasSuffix(fp(m).patches[1], `{"spec":{"replicas":2}}`) {
 		t.Errorf("patches = %v", fp(m).patches)
@@ -1014,7 +1081,8 @@ func TestScaleUpDownFromTable(t *testing.T) {
 	sn.Columns = []k8s.Column{{Name: "Name"}}
 	sn.Rows[0].Cells = []string{"web"}
 	m = feed(m, k8s.Update{Snapshot: sn, Status: k8s.StatusLive})
-	m, cmd = press(m, "+")
+	m, _ = press(m, "+")
+	m, cmd = press(m, "y")
 	execCmdInto(&m, cmd)
 	if m.err == nil || !strings.Contains(m.err.Error(), "desired replicas") {
 		t.Errorf("expected a readable error, got %v", m.err)
@@ -1066,5 +1134,190 @@ func execCmdInto(m *Model, cmd tea.Cmd) {
 			*m = mm.(Model)
 		}
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func fl(m Model) *fakeLogger { return m.deps.logs.(*fakeLogger) }
+
+func ts(sec int) time.Time { return time.Date(2026, 9, 14, 12, 0, sec, 0, time.UTC) }
+
+// openLogs opens logs on the selected pod and runs the container fetch
+// and stream start synchronously.
+func openLogs(t *testing.T, m Model) Model {
+	t.Helper()
+	m, cmd := press(m, "l")
+	if cmd == nil {
+		t.Fatal("l should start the logs view")
+	}
+	lv, ok := m.top().(*logsView)
+	if !ok {
+		t.Fatalf("top = %T", m.top())
+	}
+	mm, _ := m.Update(cmd()) // containersMsg -> restart -> wait cmd (abandoned)
+	m = mm.(Model)
+	if lv.streams != 2 || len(fl(m).calls) != 2 {
+		t.Fatalf("expected two streams, got %d (%v)", lv.streams, fl(m).calls)
+	}
+	return m
+}
+
+// deliver pushes events into the merged channel the view is waiting on and
+// runs one wait round.
+func deliver(m Model, events ...k8s.LogEvent) Model {
+	lv := m.top().(*logsView)
+	mm, _ := m.Update(logLinesMsg{id: lv.id, events: events})
+	return mm.(Model)
+}
+
+func TestLogsOpenMergeAndToggles(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "down") // b
+	m = openLogs(t, m)
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "test-ctx › default › pods › b › logs") {
+		t.Errorf("crumbs:\n%s", out)
+	}
+	// Lines from two containers arrive out of order; merged view sorts by time.
+	m = deliver(m,
+		k8s.LogEvent{Line: k8s.LogLine{Container: "sidecar", Time: ts(2), Text: "proxy ready"}},
+		k8s.LogEvent{Line: k8s.LogLine{Container: "app", Time: ts(1), Text: "GET /healthz 200"}},
+		k8s.LogEvent{Line: k8s.LogLine{Container: "app", Time: ts(3), Text: "GET /users 500"}},
+	)
+	out = stripANSI(m.View().Content)
+	i1, i2, i3 := strings.Index(out, "GET /healthz"), strings.Index(out, "proxy ready"), strings.Index(out, "GET /users")
+	if !(i1 < i2 && i2 < i3) || i1 < 0 {
+		t.Errorf("lines not merged by time:\n%s", out)
+	}
+	if !strings.Contains(out, "app     GET /healthz") || !strings.Contains(out, "sidecar proxy ready") {
+		t.Errorf("container prefix missing in merged view:\n%s", out)
+	}
+	if !strings.Contains(out, "3 lines") || !strings.Contains(out, "following") {
+		t.Errorf("status missing:\n%s", out)
+	}
+	if strings.Contains(out, "12:00:01") {
+		t.Error("timestamps should be hidden by default")
+	}
+	m, _ = press(m, "t")
+	if !strings.Contains(stripANSI(m.View().Content), ts(1).Local().Format("15:04:05")) {
+		t.Error("t should show timestamps")
+	}
+	// Regex filter, case-insensitive, with count.
+	m, _ = press(m, "/")
+	m = typeStr(m, "get.*500")
+	out = stripANSI(m.View().Content)
+	if strings.Contains(out, "healthz") || !strings.Contains(out, "GET /users 500") || !strings.Contains(out, "1 of 3 lines") {
+		t.Errorf("regex filter wrong:\n%s", out)
+	}
+	m = typeStr(m, "(")
+	if !strings.Contains(stripANSI(m.View().Content), "error parsing regexp") {
+		t.Error("invalid regex should show an error")
+	}
+	m, _ = press(m, "esc")
+	if m.top().(*logsView).re != nil {
+		t.Error("esc while typing should clear the filter")
+	}
+	// Wrap toggles and the view still renders at height.
+	m, _ = press(m, "w")
+	if lines := strings.Count(m.View().Content, "\n") + 1; lines != 24 {
+		t.Errorf("view has %d lines, want 24", lines)
+	}
+}
+
+func TestLogsContainerAndSincePickers(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m = openLogs(t, m)
+	m, _ = press(m, "c")
+	m = typeStr(m, "sidecar")
+	m, _ = press(m, "enter")
+	lv := m.top().(*logsView)
+	if lv.selected != "sidecar" || lv.streams != 1 || !strings.HasSuffix(fl(m).calls[len(fl(m).calls)-1], "/sidecar since=0s tail=1000") {
+		t.Errorf("container switch: selected=%q streams=%d calls=%v", lv.selected, lv.streams, fl(m).calls)
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "logs: sidecar") {
+		t.Error("crumb should name the container")
+	}
+	m, _ = press(m, "s")
+	m = typeStr(m, "15m")
+	m, _ = press(m, "enter")
+	if lv.opts.Since != 15*time.Minute || !strings.HasSuffix(fl(m).calls[len(fl(m).calls)-1], "since=15m0s tail=0") {
+		t.Errorf("since: %v calls=%v", lv.opts.Since, fl(m).calls)
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "since 15m") {
+		t.Error("status should show the window")
+	}
+}
+
+func TestLogsFollowPausesOnScroll(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m = openLogs(t, m)
+	var events []k8s.LogEvent
+	for i := 0; i < 60; i++ {
+		events = append(events, k8s.LogEvent{Line: k8s.LogLine{Container: "app", Time: ts(i), Text: fmt.Sprintf("line %02d", i)}})
+	}
+	m = deliver(m, events...)
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "line 59") || strings.Contains(out, "line 00") {
+		t.Errorf("should follow to the end:\n%s", out)
+	}
+	m, _ = press(m, "k")
+	if m.top().(*logsView).follow || !strings.Contains(stripANSI(m.View().Content), "paused") {
+		t.Error("scrolling up should pause follow")
+	}
+	m = deliver(m, k8s.LogEvent{Line: k8s.LogLine{Container: "app", Time: ts(60), Text: "line 60"}})
+	if strings.Contains(stripANSI(m.View().Content), "line 60") {
+		t.Error("paused view must not jump to new lines")
+	}
+	m, _ = press(m, "f")
+	if !strings.Contains(stripANSI(m.View().Content), "line 60") {
+		t.Error("f should resume follow at the end")
+	}
+	// Stream end is marked.
+	m = deliver(m, k8s.LogEvent{Ended: true}, k8s.LogEvent{Ended: true})
+	if !strings.Contains(stripANSI(m.View().Content), "stream ended") || !strings.Contains(stripANSI(m.View().Content), "ended") {
+		t.Error("ended streams should be shown")
+	}
+}
+
+func TestLogsSaveAndBack(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m = openLogs(t, m)
+	m = deliver(m,
+		k8s.LogEvent{Line: k8s.LogLine{Container: "app", Time: ts(1), Text: "hello"}},
+		k8s.LogEvent{Line: k8s.LogLine{Container: "sidecar", Time: ts(2), Text: "world"}},
+	)
+	m, _ = press(m, "S")
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "saved ") {
+		t.Fatalf("save notice missing:\n%s", out)
+	}
+	files, _ := os.ReadDir(m.saveDir)
+	if len(files) != 1 || !strings.HasPrefix(files[0].Name(), "a-") {
+		t.Fatalf("saved files = %v", files)
+	}
+	b, _ := os.ReadFile(m.saveDir + "/" + files[0].Name())
+	if !strings.Contains(string(b), "[app] hello") || !strings.Contains(string(b), "[sidecar] world") || !strings.Contains(string(b), "2026-09-14T12:00:01Z") {
+		t.Errorf("saved content:\n%s", b)
+	}
+	m, _ = press(m, "esc")
+	if _, ok := m.top().(*resourceView); !ok {
+		t.Error("esc should return to the table")
+	}
+	if m.top().(*resourceView).selectedKey() != "1" {
+		t.Error("selection should be preserved")
+	}
+}
+
+func TestLogsOnNonPodIsANotice(t *testing.T) {
+	m := onDeployments(t)
+	m, cmd := press(m, "l")
+	if cmd == nil || len(m.stack) != 2 {
+		t.Fatal("l on a deployment should not push a view")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "logs open from a pod") {
+		t.Error("notice missing")
 	}
 }

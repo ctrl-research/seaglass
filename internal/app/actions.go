@@ -23,10 +23,15 @@ type patcher interface {
 // action is one operation on a selected object. Built-ins are defined in
 // Go here; M4's config layer will produce the same struct from YAML.
 type action struct {
-	Name    string      // palette label, e.g. "restart"
-	Desc    string      // e.g. "rollout restart"
-	Key     key.Binding // may be unbound
+	Name string      // palette label, e.g. "restart"
+	Desc string      // e.g. "rollout restart"
+	Key  key.Binding // may be unbound
+	// Confirm asks before running. Every built-in that changes the cluster
+	// sets it; config may turn it off per action.
 	Confirm bool
+	// Force offers a force toggle in the confirm dialog. For deletes it
+	// means grace period 0.
+	Force bool
 	// Input, when set, prompts the user for a value before running.
 	Input *inputSpec
 	// Match decides whether the action applies to a resource type.
@@ -74,10 +79,20 @@ type actionResultMsg struct {
 
 // pendingAction is an action awaiting confirmation or input.
 type pendingAction struct {
-	act  action
-	tgt  target
-	cols []k8s.Column
-	row  k8s.Row
+	act   action
+	tgt   target
+	cols  []k8s.Column
+	row   k8s.Row
+	input string // value from the prompt, if the action has one
+	force bool   // toggled in the confirm dialog
+}
+
+// question is the confirm dialog title for a pending action.
+func (p pendingAction) question() string {
+	if p.act.Input != nil {
+		return fmt.Sprintf("%s %s to %s %s?", p.act.Name, p.tgt, p.input, p.act.Input.Label)
+	}
+	return p.act.Desc + " " + p.tgt.String() + "?"
 }
 
 // matchKinds matches a set of group/resource pairs.
@@ -99,7 +114,7 @@ var builtinActions = []action{
 		Name:    "restart",
 		Desc:    "rollout restart",
 		Key:     bind("r", "rollout restart", "r"),
-		Confirm: false,
+		Confirm: true,
 		Match:   matchKinds("apps/deployments", "apps/statefulsets", "apps/daemonsets"),
 		Fields: func(a actionArgs) ([]k8s.Field, error) {
 			return []k8s.Field{{
@@ -109,10 +124,11 @@ var builtinActions = []action{
 		},
 	},
 	{
-		Name:  "scale",
-		Desc:  "scale replicas",
-		Key:   bind("=", "scale to…", "="),
-		Match: scalable,
+		Name:    "scale",
+		Desc:    "scale replicas",
+		Key:     bind("=", "scale to…", "="),
+		Confirm: true,
+		Match:   scalable,
 		Input: &inputSpec{
 			Label: "replicas",
 			Default: func(cols []k8s.Column, row k8s.Row) string {
@@ -133,24 +149,27 @@ var builtinActions = []action{
 		},
 	},
 	{
-		Name:   "scale up",
-		Desc:   "one more replica",
-		Key:    bind("+", "scale +1", "+"),
-		Match:  scalable,
-		Fields: scaleBy(1),
+		Name:    "scale up",
+		Desc:    "one more replica",
+		Key:     bind("+", "scale +1", "+"),
+		Confirm: true,
+		Match:   scalable,
+		Fields:  scaleBy(1),
 	},
 	{
-		Name:   "scale down",
-		Desc:   "one fewer replica",
-		Key:    bind("-", "scale -1", "-"),
-		Match:  scalable,
-		Fields: scaleBy(-1),
+		Name:    "scale down",
+		Desc:    "one fewer replica",
+		Key:     bind("-", "scale -1", "-"),
+		Confirm: true,
+		Match:   scalable,
+		Fields:  scaleBy(-1),
 	},
 	{
 		Name:    "delete",
 		Desc:    "delete object",
 		Key:     bind("ctrl+d", "delete", "ctrl+d"),
 		Confirm: true,
+		Force:   true,
 		Match:   func(k8s.Resource) bool { return true },
 	},
 }
@@ -212,16 +231,25 @@ func actionsFor(res k8s.Resource) []action {
 	return out
 }
 
-// runAction executes an action against a target off the UI thread.
-func runAction(p patcher, a action, tgt target, args actionArgs) tea.Cmd {
+// runAction executes a pending action off the UI thread.
+func runAction(p patcher, pa pendingAction) tea.Cmd {
+	a, tgt := pa.act, pa.tgt
+	args := actionArgs{cols: pa.cols, row: pa.row, input: pa.input}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if a.Fields == nil {
-			if err := p.Delete(ctx, tgt.res, tgt.namespace, tgt.name, nil); err != nil {
+			var grace *int64
+			summary := "deleted " + tgt.String()
+			if pa.force {
+				zero := int64(0)
+				grace = &zero
+				summary = "force " + summary
+			}
+			if err := p.Delete(ctx, tgt.res, tgt.namespace, tgt.name, grace); err != nil {
 				return actionResultMsg{err: err}
 			}
-			return actionResultMsg{summary: "deleted " + tgt.String()}
+			return actionResultMsg{summary: summary}
 		}
 		args.now = time.Now()
 		fields, err := a.Fields(args)

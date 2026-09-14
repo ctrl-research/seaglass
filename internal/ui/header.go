@@ -6,61 +6,54 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// logo is a three-line wordmark in box-drawing characters.
+// logo is the wordmark, six lines of figlet-style ASCII.
 var logo = []string{
-	"┌─┐┌─┐┌─┐┌─┐┬  ┌─┐┌─┐┌─┐",
-	"└─┐├┤ ├─┤│ ┬│  ├─┤└─┐└─┐",
-	"└─┘└─┘┴ ┴└─┘┴─┘┴ ┴└─┘└─┘",
+	"  ____                   _               ",
+	" / ___|  ___  __ _  __ _| | __ _ ___ ___ ",
+	" \\___ \\ / _ \\/ _` |/ _` | |/ _` / __/ __|",
+	"  ___) |  __/ (_| | (_| | | (_| \\__ \\__ \\",
+	" |____/ \\___|\\__,_|\\__, |_|\\__,_|___/___/",
+	"                   |___/                 ",
 }
 
-const logoWidth = 24
+const logoWidth = 41
 
 var (
 	logoStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("79")).Bold(true)
 	hdrKeyStyle   = lipgloss.NewStyle().Faint(true)
 	hdrValStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	hdrRuleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	headerMinRows = 18 // terminal height below which the header is hidden
-	headerMinCols = 48
+	headerMinRows = 22 // terminal height below which the header is hidden
+	headerMinCols = 60
 )
 
 // Field is one key/value pair in the header info block.
 type Field struct{ Key, Value string }
 
-// Header is the top-of-screen block: logo on the left, two columns of
-// fields beside it, and a single horizontal rule beneath.
+// Header is the top-of-screen block: logo on the left, a column of fields
+// beside it, and a single horizontal rule beneath.
 type Header struct {
-	// Left column fields (up to 3) and right column fields (up to 3).
-	Left, Right []Field
+	// Fields are shown one per logo line, up to six.
+	Fields []Field
 }
 
 // HeaderHeight is the number of lines Header.Render produces when shown.
-const HeaderHeight = 4
+const HeaderHeight = 7
 
 // Visible reports whether the header fits the terminal.
 func (h Header) Visible(width, height int) bool {
 	return height >= headerMinRows && width >= headerMinCols
 }
 
-// Render draws the header at the given width. Call Visible first.
+// Render draws the header at the given width. Call Visible first. Fields
+// are dropped when there is no room beside the logo.
 func (h Header) Render(width int) string {
-	avail := width - logoWidth - 2
-	leftW := 0
-	for _, f := range h.Left {
-		leftW = max(leftW, lipgloss.Width(f.Key)+2+lipgloss.Width(f.Value))
-	}
-	showRight := len(h.Right) > 0 && avail-leftW-3 >= 20
-
-	lines := make([]string, 3)
-	for i := 0; i < 3; i++ {
-		line := logoStyle.Render(logo[i]) + "  "
-		if i < len(h.Left) {
-			line += renderField(h.Left[i], leftW)
-		} else {
-			line += strings.Repeat(" ", leftW)
-		}
-		if showRight && i < len(h.Right) {
-			line += "   " + renderField(h.Right[i], 0)
+	showFields := width-logoWidth-2 >= 24
+	lines := make([]string, len(logo))
+	for i, l := range logo {
+		line := logoStyle.Render(l)
+		if showFields && i < len(h.Fields) {
+			line += "  " + renderField(h.Fields[i], 0)
 		}
 		lines[i] = lipgloss.NewStyle().MaxWidth(width).Render(line)
 	}

@@ -33,10 +33,14 @@ type Options struct {
 	// State persists the last context, namespace, and resource. Optional.
 	State stateStore
 
-	// streamer, getter, and patcher override the client for tests.
+	// SaveDir is where log files are written. Defaults to the working dir.
+	SaveDir string
+
+	// streamer, getter, patcher, and logger override the client for tests.
 	streamer streamer
 	getter   getter
 	patcher  patcher
+	logger   logger
 	// contexts overrides kubeconfig context discovery for tests.
 	contexts []string
 }
@@ -69,6 +73,7 @@ type Model struct {
 
 	state     stateStore
 	lastSaved string // fingerprint of the last persisted position
+	saveDir   string
 
 	width, height int
 }
@@ -102,7 +107,8 @@ type (
 func New(opts Options) Model {
 	m := Model{
 		client:    opts.Client,
-		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher},
+		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger},
+		saveDir:   opts.SaveDir,
 		namespace: opts.Namespace,
 		palette:   newPalette(),
 		prompt:    newPrompt(),
@@ -118,6 +124,12 @@ func New(opts Options) Model {
 	}
 	if m.deps.patch == nil && opts.Client != nil {
 		m.deps.patch = opts.Client
+	}
+	if m.deps.logs == nil && opts.Client != nil {
+		m.deps.logs = opts.Client
+	}
+	if m.saveDir == "" {
+		m.saveDir = "."
 	}
 	m.pushResource(opts.Resource)
 	return m
@@ -173,6 +185,14 @@ func (m *Model) pushResource(res k8s.Resource) *resourceView {
 	return v
 }
 
+// pushLogs adds a logs view for a pod. It does not start it.
+func (m *Model) pushLogs(ns, pod string) *logsView {
+	m.nextID++
+	v := newLogsView(m.nextID, ns, pod, m.saveDir)
+	m.stack = append(m.stack, v)
+	return v
+}
+
 // pushObject adds an object view on top of the stack. It does not start it.
 func (m *Model) pushObject(res k8s.Resource, ns, name string, mode objMode) *objectView {
 	m.nextID++
@@ -197,16 +217,18 @@ func (m Model) header() ui.Header {
 	if ns == "" {
 		ns = "all"
 	}
-	h := ui.Header{
-		Left:  []ui.Field{{Key: "context", Value: "-"}, {Key: "namespace", Value: ns}, {Key: "user", Value: "-"}},
-		Right: []ui.Field{{Key: "cluster", Value: "-"}, {Key: "k8s", Value: orDash(m.serverVersion)}, {Key: "seaglass", Value: orDash(m.version)}},
-	}
+	ctx, user, host := "-", "-", "-"
 	if m.client != nil {
-		h.Left[0].Value = m.client.Context
-		h.Left[2].Value = orDash(m.client.User)
-		h.Right[0].Value = orDash(m.client.Host)
+		ctx, user, host = m.client.Context, orDash(m.client.User), orDash(m.client.Host)
 	}
-	return h
+	return ui.Header{Fields: []ui.Field{
+		{Key: "context", Value: ctx},
+		{Key: "namespace", Value: ns},
+		{Key: "user", Value: user},
+		{Key: "cluster", Value: host},
+		{Key: "k8s", Value: orDash(m.serverVersion)},
+		{Key: "seaglass", Value: orDash(m.version)},
+	}}
 }
 
 func orDash(s string) string {
@@ -216,8 +238,12 @@ func orDash(s string) string {
 	return s
 }
 
-// headerHeight is the lines the header takes, 0 when hidden.
+// headerHeight is the lines the header takes, 0 when hidden. The help
+// overlay reclaims the space.
 func (m Model) headerHeight() int {
+	if m.showHelp {
+		return 0
+	}
 	if m.header().Visible(m.width, m.height) {
 		return ui.HeaderHeight
 	}
@@ -294,6 +320,18 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case containersMsg:
+		if lv, ok := m.top().(*logsView); ok && lv.id == msg.id {
+			return m, lv.handleContainers(msg)
+		}
+		return m, nil
+
+	case logLinesMsg:
+		if lv, ok := m.top().(*logsView); ok && lv.id == msg.id {
+			return m, lv.handleLines(msg)
+		}
+		return m, nil
+
 	case resourcesMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -360,7 +398,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "y", "Y":
 			p := *m.confirm
 			m.confirm = nil
-			return m, runAction(m.deps.patch, p.act, p.tgt, actionArgs{cols: p.cols, row: p.row})
+			return m, runAction(m.deps.patch, p)
+		case "f", "F":
+			if m.confirm.act.Force {
+				m.confirm.force = !m.confirm.force
+			}
 		case "n", "N", "esc", "q", "ctrl+c":
 			m.confirm = nil
 		}
@@ -373,7 +415,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if submitted {
 			p := m.prompt.pending
-			return m, tea.Batch(cmd, runAction(m.deps.patch, p.act, p.tgt, actionArgs{cols: p.cols, row: p.row, input: value}))
+			p.input = value
+			if p.act.Confirm {
+				m.confirm = &p
+				return m, cmd
+			}
+			return m, tea.Batch(cmd, runAction(m.deps.patch, p))
 		}
 		return m, cmd
 	}
@@ -424,6 +471,21 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch {
+		case is(msg, keys.Logs):
+			row, ok := rv.selectedRow()
+			if !ok {
+				return m, nil
+			}
+			if rv.res.GVR != k8s.Pods.GVR {
+				return m, m.setNotice("logs open from a pod; select one in the pods view")
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			rv.stop()
+			m.pushLogs(ns, row.Name)
+			return m, m.startTop()
 		case is(msg, keys.Sort):
 			if len(rv.snapshot.Columns) == 0 {
 				return m, nil
@@ -451,6 +513,28 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if ov, ok := top.(*objectView); ok && is(msg, keys.Reload) {
 		return m, ov.start(m.deps)
+	}
+	if lv, ok := top.(*logsView); ok {
+		switch {
+		case is(msg, keys.LogContainer):
+			if len(lv.containers) == 0 {
+				return m, nil
+			}
+			cmd := m.palette.showWith(containerItems(lv.containers, lv.selected), "container")
+			lv.resize(m.width, m.bodyHeight())
+			return m, cmd
+		case is(msg, keys.LogSince):
+			cmd := m.palette.showWith(sinceItems(lv.opts.Since), "since")
+			lv.resize(m.width, m.bodyHeight())
+			return m, cmd
+		case is(msg, keys.LogSave):
+			path, err := lv.save()
+			if err != nil {
+				m.err = err
+				return m, nil
+			}
+			return m, m.setNotice("saved " + path)
+		}
 	}
 
 	// The view gets first refusal (a table uses esc to clear its filter).
@@ -493,7 +577,7 @@ func (m *Model) trigger(a action, rv *resourceView) tea.Cmd {
 		m.confirm = &pa
 		return nil
 	}
-	return runAction(m.deps.patch, a, tgt, actionArgs{cols: rv.snapshot.Columns, row: row})
+	return runAction(m.deps.patch, pa)
 }
 
 // setNotice shows a transient success message for a few seconds.
@@ -528,6 +612,16 @@ func (m Model) helpSections() []ui.HelpSection {
 // choose acts on a palette selection.
 func (m *Model) choose(it paletteItem) tea.Cmd {
 	switch it.Kind {
+	case itemContainer:
+		if lv, ok := m.top().(*logsView); ok {
+			return lv.setContainer(it.Name)
+		}
+		return nil
+	case itemSince:
+		if lv, ok := m.top().(*logsView); ok {
+			return lv.setSince(it.Since)
+		}
+		return nil
 	case itemAction:
 		switch it.Name {
 		case actionQuit:
@@ -612,7 +706,7 @@ func (m *Model) useClient(c *k8s.Client) tea.Cmd {
 		v.stop()
 	}
 	m.client = c
-	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c}
+	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c, logs: c}
 	m.namespace = c.Namespace
 	m.resources, m.namespaces = nil, nil
 	m.serverVersion = ""
@@ -679,9 +773,18 @@ func (m Model) View() tea.View {
 	}
 	switch {
 	case m.confirm != nil:
-		bar.Hint, bar.Back = "y confirm  n cancel", ""
 		p := m.confirm
-		parts = append(parts, ui.Confirm(p.act.Desc+"?", p.tgt.String(), m.width, m.bodyHeight()))
+		bar.Hint, bar.Back = "y confirm  n cancel", ""
+		var toggles []ui.Toggle
+		if p.act.Force {
+			bar.Hint = "y confirm  f force  n cancel"
+			toggles = append(toggles, ui.Toggle{Key: "f", Label: "force (grace period 0)", On: p.force})
+		}
+		detail := p.tgt.String()
+		if p.act.Input != nil {
+			detail = p.act.Input.Label + ": " + p.input
+		}
+		parts = append(parts, ui.Confirm(p.question(), detail, toggles, m.width, m.bodyHeight()))
 	case m.showHelp:
 		bar.Hint, bar.Back = "? or esc closes help", ""
 		parts = append(parts, ui.RenderHelp(m.helpSections(), m.width, m.bodyHeight()))
