@@ -157,7 +157,13 @@ edit need bespoke code. This avoids writing the actions twice.
 - [x] Logs (`l`): follow with pause on scroll, containers merged by server
   timestamp with a picker, since window, timestamps toggle, regex filter
   with highlight, wrap toggle, save to file. Previous-container logs later.
-- [ ] Exec shell into a container via `tea.ExecProcess`.
+- [x] Exec shell into a container (`x`) over the API server with client-go
+  remotecommand (websocket, SPDY fallback), rendered inside the TUI by an
+  embedded terminal emulator so header and status bar stay visible;
+  crumbs name the pod and container, the status bar the remote user.
+  Resize forwarding, bash-or-sh, container picker, `ctrl+]` closes.
+  A clean exit (shell exit or `ctrl+]`) returns to the table automatically
+  with a notice; a real error (no shell in image) stays until esc.
 - [ ] Edit in `$EDITOR` (`e`) with server-side apply and a diff-on-conflict
   message.
 - [ ] Port-forward with an active-forwards panel and cancel.

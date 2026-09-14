@@ -30,6 +30,10 @@ type keyMap struct {
 	Top        key.Binding
 	Bottom     key.Binding
 
+	// Pods / shell
+	Shell      key.Binding
+	ShellClose key.Binding
+
 	// Logs
 	Logs          key.Binding
 	LogContainer  key.Binding
@@ -71,6 +75,8 @@ var keys = keyMap{
 	Top:        bind("g", "top", "g"),
 	Bottom:     bind("G", "bottom", "G"),
 
+	Shell:         bind("x", "shell into container", "x"),
+	ShellClose:    bind("ctrl+]", "close the shell", "ctrl+]"),
 	Logs:          bind("l", "logs", "l"),
 	LogContainer:  bind("c", "choose container", "c"),
 	LogSince:      bind("s", "since (time window)", "s"),

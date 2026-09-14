@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -36,11 +37,13 @@ type Options struct {
 	// SaveDir is where log files are written. Defaults to the working dir.
 	SaveDir string
 
-	// streamer, getter, patcher, and logger override the client for tests.
+	// streamer, getter, patcher, logger, and execer override the client
+	// for tests.
 	streamer streamer
 	getter   getter
 	patcher  patcher
 	logger   logger
+	execer   execer
 	// contexts overrides kubeconfig context discovery for tests.
 	contexts []string
 }
@@ -65,6 +68,7 @@ type Model struct {
 	showHelp   bool
 	confirm    *pendingAction
 	prompt     prompt
+	execTarget *target // pod awaiting a container choice for a shell
 	notice     string
 	noticeSeq  int
 
@@ -101,13 +105,19 @@ type (
 		err     error
 	}
 	clearNoticeMsg struct{ seq int }
+	// execContainersMsg carries a pod's containers for a pending shell.
+	execContainersMsg struct {
+		tgt   target
+		names []string
+		err   error
+	}
 )
 
 // New builds the root model. Streaming starts in Init.
 func New(opts Options) Model {
 	m := Model{
 		client:    opts.Client,
-		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger},
+		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger, exec: opts.execer},
 		saveDir:   opts.SaveDir,
 		namespace: opts.Namespace,
 		palette:   newPalette(),
@@ -127,6 +137,9 @@ func New(opts Options) Model {
 	}
 	if m.deps.logs == nil && opts.Client != nil {
 		m.deps.logs = opts.Client
+	}
+	if m.deps.exec == nil && opts.Client != nil {
+		m.deps.exec = opts.Client
 	}
 	if m.saveDir == "" {
 		m.saveDir = "."
@@ -326,6 +339,47 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case execContainersMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		switch len(msg.names) {
+		case 0:
+			m.err = fmt.Errorf("%s has no containers", msg.tgt)
+			return m, nil
+		case 1:
+			return m, m.shell(msg.tgt, msg.names[0])
+		}
+		tgt := msg.tgt
+		m.execTarget = &tgt
+		cmd := m.palette.showWith(execItems(msg.names), "shell into which container?")
+		m.top().resize(m.width, m.bodyHeight())
+		return m, cmd
+
+	case shellOutputMsg:
+		if sv, ok := m.top().(*shellView); ok && sv.id == msg.id {
+			return m, sv.handleOutput(msg)
+		}
+		return m, nil
+
+	case shellExitMsg:
+		if sv, ok := m.top().(*shellView); ok && sv.id == msg.id {
+			if clean := sv.handleExit(msg); clean {
+				// Return to the view beneath the shell automatically.
+				summary := "shell closed: " + sv.namespace + "/" + sv.pod + " [" + sv.container + "]"
+				return m, tea.Batch(m.pop(), m.setNotice(summary))
+			}
+			// A real failure stays on screen until esc.
+		}
+		return m, nil
+
+	case shellUserMsg:
+		if sv, ok := m.top().(*shellView); ok && sv.id == msg.id {
+			sv.user = msg.user
+		}
+		return m, nil
+
 	case logLinesMsg:
 		if lv, ok := m.top().(*logsView); ok && lv.id == msg.id {
 			return m, lv.handleLines(msg)
@@ -429,6 +483,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		chosen, closed, cmd := m.palette.update(msg)
 		if closed {
 			m.top().resize(m.width, m.bodyHeight())
+			if chosen == nil {
+				m.execTarget = nil
+			}
 		}
 		if chosen != nil {
 			return m, tea.Batch(cmd, m.choose(*chosen))
@@ -471,6 +528,29 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch {
+		case is(msg, keys.Shell):
+			row, ok := rv.selectedRow()
+			if !ok {
+				return m, nil
+			}
+			if rv.res.GVR != k8s.Pods.GVR {
+				return m, m.setNotice("shell opens from a pod; select one in the pods view")
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			tgt := target{res: rv.res, namespace: ns, name: row.Name}
+			get := m.deps.get
+			return m, func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				obj, err := get.Get(ctx, k8s.Pods, tgt.namespace, tgt.name)
+				if err != nil {
+					return execContainersMsg{tgt: tgt, err: err}
+				}
+				return execContainersMsg{tgt: tgt, names: k8s.Containers(obj)}
+			}
 		case is(msg, keys.Logs):
 			row, ok := rv.selectedRow()
 			if !ok {
@@ -580,6 +660,15 @@ func (m *Model) trigger(a action, rv *resourceView) tea.Cmd {
 	return runAction(m.deps.patch, pa)
 }
 
+// shell pushes an embedded shell view for the container.
+func (m *Model) shell(tgt target, container string) tea.Cmd {
+	m.top().stop()
+	m.nextID++
+	v := newShellView(m.nextID, tgt.namespace, tgt.name, container)
+	m.stack = append(m.stack, v)
+	return m.startTop()
+}
+
 // setNotice shows a transient success message for a few seconds.
 func (m *Model) setNotice(text string) tea.Cmd {
 	m.notice = text
@@ -612,6 +701,13 @@ func (m Model) helpSections() []ui.HelpSection {
 // choose acts on a palette selection.
 func (m *Model) choose(it paletteItem) tea.Cmd {
 	switch it.Kind {
+	case itemExec:
+		if m.execTarget == nil {
+			return nil
+		}
+		tgt := *m.execTarget
+		m.execTarget = nil
+		return m.shell(tgt, it.Name)
 	case itemContainer:
 		if lv, ok := m.top().(*logsView); ok {
 			return lv.setContainer(it.Name)
@@ -706,7 +802,7 @@ func (m *Model) useClient(c *k8s.Client) tea.Cmd {
 		v.stop()
 	}
 	m.client = c
-	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c, logs: c}
+	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c, logs: c, exec: c}
 	m.namespace = c.Namespace
 	m.resources, m.namespaces = nil, nil
 	m.serverVersion = ""
@@ -793,6 +889,11 @@ func (m Model) View() tea.View {
 	}
 	parts = append(parts, bar.Render(m.width))
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, parts...))
+	if sv, ok := top.(*shellView); ok && m.confirm == nil && !m.showHelp && !m.palette.open {
+		if pos := sv.cursor(); pos != nil {
+			v.Cursor = tea.NewCursor(pos.X, pos.Y+m.headerHeight()+m.prompt.height())
+		}
+	}
 	if m.client != nil {
 		v.WindowTitle = "seaglass · " + m.client.Context
 	}

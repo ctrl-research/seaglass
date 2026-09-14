@@ -9,6 +9,13 @@ linters:
     - ineffassign
     - misspell
     - revive
+  settings:
+    revive:
+      rules:
+        # Interface methods legitimately leave some parameters unused in a
+        # given implementation (e.g. render(width, height) that ignores width).
+        - name: unused-parameter
+          disabled: true
 formatters:
   enable:
     - gofmt

@@ -31,11 +31,11 @@ type resourceView struct {
 	cancel  context.CancelFunc
 	updates <-chan k8s.Update
 
-	snapshot k8s.Snapshot
-	status_  k8s.Status
-	err      error
-	colIdx   []int
-	table    table.Model
+	snapshot   k8s.Snapshot
+	connStatus k8s.Status
+	err        error
+	colIdx     []int
+	table      table.Model
 
 	// Row filter. typing is true while the input has focus; the filter
 	// stays applied after enter until esc clears it.
@@ -66,13 +66,13 @@ func newResourceView(id int, res k8s.Resource, ns string) *resourceView {
 	fi.Placeholder = "filter rows"
 	fi.SetVirtualCursor(true)
 	return &resourceView{
-		id:        id,
-		res:       res,
-		namespace: ns,
-		status_:   k8s.StatusConnecting,
-		table:     table.New(table.WithFocused(true), table.WithStyles(styles)),
-		filter:    fi,
-		sortCol:   -1,
+		id:         id,
+		res:        res,
+		namespace:  ns,
+		connStatus: k8s.StatusConnecting,
+		table:      table.New(table.WithFocused(true), table.WithStyles(styles)),
+		filter:     fi,
+		sortCol:    -1,
 	}
 }
 
@@ -158,7 +158,7 @@ func (v *resourceView) start(d deps) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	v.cancel = cancel
 	v.updates = d.stream.Stream(ctx, v.res, v.namespace)
-	v.status_ = k8s.StatusConnecting
+	v.connStatus = k8s.StatusConnecting
 	return v.wait()
 }
 
@@ -186,7 +186,7 @@ func (v *resourceView) wait() tea.Cmd {
 // handle applies an update and re-arms the wait.
 func (v *resourceView) handle(msg updateMsg, width, height int) tea.Cmd {
 	selected := v.selectedKey()
-	v.status_ = msg.Status
+	v.connStatus = msg.Status
 	v.err = msg.Err
 	v.snapshot = msg.Snapshot
 	v.applyFilter()
@@ -277,7 +277,7 @@ func (v *resourceView) status() viewStatus {
 	if len(v.snapshot.Rows) > len(v.filtered) {
 		count = fmt.Sprintf("%d of %d rows", len(v.filtered), len(v.snapshot.Rows))
 	}
-	state := v.status_.String()
+	state := v.connStatus.String()
 	if v.colMode != ui.ColumnsAuto {
 		state = v.colMode.String() + " · " + state
 	}
@@ -291,7 +291,7 @@ func (v *resourceView) hint() string {
 func (v *resourceView) help() []helpSection {
 	km := v.table.KeyMap
 	return []helpSection{
-		{"Table", []key.Binding{keys.Filter, keys.Sort, keys.Reverse, keys.Columns, keys.Detail, keys.YAML}},
+		{"Table", []key.Binding{keys.Filter, keys.Sort, keys.Reverse, keys.Columns, keys.Detail, keys.YAML, keys.Logs, keys.Shell}},
 		{"Move", []key.Binding{km.LineUp, km.LineDown, km.PageUp, km.PageDown, km.HalfPageUp, km.HalfPageDown, km.GotoTop, km.GotoBottom}},
 	}
 }

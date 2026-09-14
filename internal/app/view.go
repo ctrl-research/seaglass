@@ -32,6 +32,7 @@ type deps struct {
 	get    getter
 	patch  patcher
 	logs   logger
+	exec   execer
 }
 
 // viewStatus is what a view contributes to the status bar.

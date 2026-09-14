@@ -91,10 +91,10 @@ func (s *Store) Save(st State) error {
 }
 
 // Update records a position for a context and makes it the last context.
-func (st *State) Update(context string, cs ContextState) {
-	if st.Contexts == nil {
-		st.Contexts = map[string]ContextState{}
+func (s *State) Update(context string, cs ContextState) {
+	if s.Contexts == nil {
+		s.Contexts = map[string]ContextState{}
 	}
-	st.LastContext = context
-	st.Contexts[context] = cs
+	s.LastContext = context
+	s.Contexts[context] = cs
 }

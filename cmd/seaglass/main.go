@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/go-logr/logr"
 	"k8s.io/klog/v2"
 
 	"github.com/ctrl-research/seaglass/internal/app"
@@ -49,9 +50,11 @@ func run() error {
 		return nil
 	}
 
-	// client-go logs via klog to stderr, which would corrupt the TUI.
+	// client-go logs via klog to stderr, which would corrupt the TUI. Route
+	// every klog path (including contextual/structured) to a discard logger.
 	klog.SetOutput(io.Discard)
 	klog.LogToStderr(false)
+	klog.SetLogger(logr.Discard())
 
 	closeLog, err := setupLogging(debug)
 	if err != nil {

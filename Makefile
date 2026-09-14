@@ -26,3 +26,7 @@ tidy:
 
 clean:
 	rm -rf bin
+
+.PHONY: lint-install
+lint-install:
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2

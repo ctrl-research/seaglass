@@ -63,7 +63,7 @@ func (c *Client) Logs(ctx context.Context, namespace, pod, container string, opt
 	out := make(chan LogEvent, 256)
 	go func() {
 		defer close(out)
-		defer body.Close()
+		defer func() { _ = body.Close() }()
 		sc := bufio.NewScanner(body)
 		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for sc.Scan() {

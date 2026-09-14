@@ -34,6 +34,7 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | `s` | Sort by a column (pick from the palette); choose the same column again or press `S` to reverse |
 | `w` | Cycle columns: auto (fit to width), wide (all), narrow (essentials) |
 | `enter` or `d` | Detail view of the selected object: metadata, status, conditions, containers |
+| `x` | Shell into the selected pod inside the TUI (bash if present, else sh); picks a container when there are several. Keys go to the shell; `ctrl+]` or the shell's own `exit` closes it and returns to the table |
 | `l` | Logs of the selected pod, all containers merged by time, following |
 | In logs: `c` container, `s` since window, `t` timestamps, `w` wrap, `f` follow, `/` regex filter, `S` save to file |
 | `y` | YAML of the selected object, managed fields stripped |
