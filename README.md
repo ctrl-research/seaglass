@@ -27,12 +27,13 @@ Debug logs go to `~/.local/state/seaglass/seaglass.log` (or `$XDG_STATE_HOME`).
 |---|---|
 | `:` or `ctrl+p` | Command palette: fuzzy search resource types, namespaces, contexts |
 | `enter` | Open the selected palette item |
-| `esc` | Close the palette, or go back one view |
+| `/` | Filter rows: every word must appear somewhere in the row; `enter` keeps it, `esc` clears |
+| `esc` | Clear the filter, close the palette, or go back one view |
 | `j`/`k`, arrows, `pgup`/`pgdn`, `g`/`G` | Move in the table |
 | `q` or `ctrl+c` | Quit |
 
 Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
-`ctx prod` narrows to contexts. Choosing a resource pushes a new view;
+`ns all` returns to all namespaces, `ctx prod` narrows to contexts. Choosing a resource pushes a new view;
 choosing a namespace keeps the current resource and resets the view stack;
 choosing a context reconnects.
 

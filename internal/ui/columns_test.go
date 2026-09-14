@@ -54,3 +54,11 @@ func TestStatusBarWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusBarFilteredCount(t *testing.T) {
+	s := StatusBar{Context: "c", Namespace: "n", Crumbs: []string{"pods"}, Rows: 2, Total: 9, State: "live"}
+	out := s.Render(80)
+	if !contains(out, "2 of 9 rows") {
+		t.Errorf("expected filtered count, got %q", out)
+	}
+}

@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -44,7 +47,18 @@ type resourceView struct {
 	err      error
 	colIdx   []int
 	table    table.Model
+
+	// Row filter. typing is true while the input has focus; the filter
+	// stays applied after enter until esc clears it.
+	filter   textinput.Model
+	typing   bool
+	filtered []k8s.Row // rows after the filter; aliases snapshot.Rows when empty
 }
+
+var (
+	filterPromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	filterCountStyle  = lipgloss.NewStyle().Faint(true)
+)
 
 func newResourceView(id int, res k8s.Resource, ns string) *resourceView {
 	if !res.Namespaced {
@@ -53,13 +67,64 @@ func newResourceView(id int, res k8s.Resource, ns string) *resourceView {
 	styles := table.DefaultStyles()
 	styles.Header = styles.Header.Bold(true).Foreground(lipgloss.Color("81"))
 	styles.Selected = styles.Selected.Bold(true).Foreground(lipgloss.Color("229")).Background(lipgloss.Color("57"))
+	fi := textinput.New()
+	fi.Prompt = " / "
+	fi.Placeholder = "filter rows"
+	fi.SetVirtualCursor(true)
 	return &resourceView{
 		id:        id,
 		res:       res,
 		namespace: ns,
 		status:    k8s.StatusConnecting,
 		table:     table.New(table.WithFocused(true), table.WithStyles(styles)),
+		filter:    fi,
 	}
+}
+
+// filterActive reports whether the filter line is shown.
+func (v *resourceView) filterActive() bool { return v.typing || v.filter.Value() != "" }
+
+// startFilter focuses the filter input.
+func (v *resourceView) startFilter() tea.Cmd {
+	v.typing = true
+	return v.filter.Focus()
+}
+
+// clearFilter removes the filter and hides the line.
+func (v *resourceView) clearFilter() {
+	v.typing = false
+	v.filter.Blur()
+	v.filter.Reset()
+}
+
+// applyFilter recomputes filtered from the snapshot, preserving row order.
+// Rows match when every whitespace-separated term is a case-insensitive
+// substring of the row's namespace or any cell. Fuzzy matching is wrong
+// here: over a whole row, the letters of "core" appear in order in almost
+// every pod.
+func (v *resourceView) applyFilter() {
+	terms := strings.Fields(strings.ToLower(v.filter.Value()))
+	if len(terms) == 0 {
+		v.filtered = v.snapshot.Rows
+		return
+	}
+	// Always a fresh slice: filtered aliases snapshot.Rows when unfiltered,
+	// so reusing its backing array would overwrite the snapshot.
+	out := make([]k8s.Row, 0, len(v.snapshot.Rows))
+	for _, r := range v.snapshot.Rows {
+		hay := strings.ToLower(r.Namespace + " " + strings.Join(r.Cells, " "))
+		ok := true
+		for _, t := range terms {
+			if !strings.Contains(hay, t) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, r)
+		}
+	}
+	v.filtered = out
 }
 
 // start begins streaming and returns the command that delivers the first
@@ -100,6 +165,7 @@ func (v *resourceView) handle(msg updateMsg, width, height int) tea.Cmd {
 	v.status = msg.Status
 	v.err = msg.Err
 	v.snapshot = msg.Snapshot
+	v.applyFilter()
 	v.layout(width, height, selected)
 	if !v.running() {
 		return nil
@@ -113,15 +179,23 @@ func (v *resourceView) layout(width, height int, selectedKey string) {
 	if width <= 0 {
 		return
 	}
+	if v.filtered == nil {
+		v.filtered = v.snapshot.Rows
+	}
+	// Widths come from every row so columns do not jump while typing.
 	cols, idx := ui.FitColumns(v.snapshot.Columns, v.snapshot.Rows, width)
 	v.colIdx = idx
 	v.table.SetWidth(width)
-	v.table.SetHeight(max(height-1, 1)) // one line for the header
+	h := height - 1 // header
+	if v.filterActive() {
+		h-- // filter line
+	}
+	v.table.SetHeight(max(h, 1))
 	v.table.SetColumns(cols)
-	v.table.SetRows(ui.ProjectRows(v.snapshot.Rows, idx))
+	v.table.SetRows(ui.ProjectRows(v.filtered, idx))
 
 	if selectedKey != "" {
-		for i, r := range v.snapshot.Rows {
+		for i, r := range v.filtered {
 			if r.Key() == selectedKey {
 				v.table.SetCursor(i)
 				return
@@ -131,35 +205,77 @@ func (v *resourceView) layout(width, height int, selectedKey string) {
 	switch c := v.table.Cursor(); {
 	case c < 0:
 		v.table.SetCursor(0)
-	case c >= len(v.snapshot.Rows):
-		v.table.SetCursor(max(len(v.snapshot.Rows)-1, 0))
+	case c >= len(v.filtered):
+		v.table.SetCursor(max(len(v.filtered)-1, 0))
 	}
 }
 
 func (v *resourceView) selectedKey() string {
-	c := v.table.Cursor()
-	if c < 0 || c >= len(v.snapshot.Rows) {
+	r, ok := v.selectedRow()
+	if !ok {
 		return ""
 	}
-	return v.snapshot.Rows[c].Key()
+	return r.Key()
 }
 
 // selectedRow returns the highlighted row, if any.
 func (v *resourceView) selectedRow() (k8s.Row, bool) {
 	c := v.table.Cursor()
-	if c < 0 || c >= len(v.snapshot.Rows) {
+	if c < 0 || c >= len(v.filtered) {
 		return k8s.Row{}, false
 	}
-	return v.snapshot.Rows[c], true
+	return v.filtered[c], true
 }
 
-func (v *resourceView) update(msg tea.KeyPressMsg) tea.Cmd {
-	var cmd tea.Cmd
+// update handles a key. consumed is false when the key was not meaningful
+// to the view and the caller may treat it as global.
+func (v *resourceView) update(msg tea.KeyPressMsg, width, height int) (cmd tea.Cmd, consumed bool) {
+	if v.typing {
+		switch msg.String() {
+		case "esc":
+			v.clearFilter()
+			v.applyFilter()
+			v.layout(width, height, v.selectedKey())
+			return nil, true
+		case "enter":
+			v.typing = false
+			v.filter.Blur()
+			if v.filter.Value() == "" {
+				v.layout(width, height, v.selectedKey())
+			}
+			return nil, true
+		case "up", "down", "pgup", "pgdown", "ctrl+n", "ctrl+p":
+			v.table, cmd = v.table.Update(msg)
+			return cmd, true
+		}
+		before := v.filter.Value()
+		v.filter, cmd = v.filter.Update(msg)
+		if v.filter.Value() != before {
+			v.applyFilter()
+			v.layout(width, height, v.selectedKey())
+		}
+		return cmd, true
+	}
+
+	switch msg.String() {
+	case "/":
+		cmd = v.startFilter()
+		v.layout(width, height, v.selectedKey())
+		return cmd, true
+	case "esc":
+		if v.filter.Value() != "" {
+			v.clearFilter()
+			v.applyFilter()
+			v.layout(width, height, v.selectedKey())
+			return nil, true
+		}
+		return nil, false
+	}
 	v.table, cmd = v.table.Update(msg)
-	return cmd
+	return cmd, true
 }
 
-func (v *resourceView) view(height int) string {
+func (v *resourceView) view(width, height int) string {
 	var body string
 	switch {
 	case len(v.snapshot.Columns) == 0 && v.err != nil:
@@ -169,5 +285,24 @@ func (v *resourceView) view(height int) string {
 	default:
 		body = v.table.View()
 	}
+	if v.filterActive() {
+		body = lipgloss.JoinVertical(lipgloss.Left, v.filterLine(width), body)
+	}
 	return lipgloss.NewStyle().Height(height).MaxHeight(height).Render(body)
+}
+
+// filterLine renders the filter prompt with a match count.
+func (v *resourceView) filterLine(width int) string {
+	count := filterCountStyle.Render(fmt.Sprintf(" %d of %d ", len(v.filtered), len(v.snapshot.Rows)))
+	hint := ""
+	if v.typing {
+		hint = filterCountStyle.Render("enter keep · esc clear ")
+	} else {
+		hint = filterCountStyle.Render("esc clear ")
+	}
+	right := count + hint
+	v.filter.SetWidth(max(width-lipgloss.Width(right)-4, 10))
+	left := filterPromptStyle.Render(v.filter.View())
+	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 0)
+	return left + strings.Repeat(" ", gap) + right
 }

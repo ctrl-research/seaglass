@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -244,5 +245,135 @@ func TestPaletteFilterMultiTerm(t *testing.T) {
 	}
 	if !strings.Contains(m.View().Content, "no matches") {
 		t.Error("view should say no matches")
+	}
+}
+
+func TestPaletteAllNamespaces(t *testing.T) {
+	m, fs := newTest(t)
+	m, _ = press(m, ":")
+	m = typeStr(m, "ns all")
+	it, ok := m.palette.selected()
+	if !ok || it.Kind != itemNamespace || it.Name != "" || it.Label != "all namespaces" {
+		t.Fatalf("'ns all' selected %+v", it)
+	}
+	m, _ = press(m, "enter")
+	if m.namespace != "" {
+		t.Fatalf("namespace = %q, want all", m.namespace)
+	}
+	if got := fs.calls[len(fs.calls)-1]; got != "pods/" {
+		t.Errorf("stream = %q, want pods across all namespaces", got)
+	}
+	if out := stripANSI(m.View().Content); !strings.Contains(out, "test-ctx › all › pods") {
+		t.Errorf("status bar should show 'all':\n%s", out)
+	}
+}
+
+var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
+
+func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }
+
+func TestRowFilter(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "/")
+	if !m.top().typing {
+		t.Fatal("/ should start the filter")
+	}
+	m = typeStr(m, "pend")
+	if got := len(m.top().filtered); got != 1 || m.top().filtered[0].Name != "b" {
+		t.Fatalf("filter 'pend' -> %d rows (%+v)", got, m.top().filtered)
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "1 of 3") {
+		t.Errorf("filter line should show the count:\n%s", out)
+	}
+	if strings.Contains(out, "Running") {
+		t.Errorf("filtered-out rows still rendered:\n%s", out)
+	}
+	// q while typing is text, not quit.
+	m, cmd := press(m, "q")
+	if cmd != nil {
+		if _, isQuit := cmd().(tea.QuitMsg); isQuit {
+			t.Fatal("q while typing a filter must not quit")
+		}
+	}
+	if m.top().filter.Value() != "pendq" {
+		t.Errorf("filter value = %q", m.top().filter.Value())
+	}
+	if len(m.top().filtered) != 0 || !strings.Contains(stripANSI(m.View().Content), "0 of 3") {
+		t.Error("no rows should match 'pendq'")
+	}
+	// Backspace, then enter keeps the filter applied without focus.
+	mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m = mm.(Model)
+	m, _ = press(m, "enter")
+	if m.top().typing || len(m.top().filtered) != 1 {
+		t.Fatalf("enter should keep filter: typing=%v rows=%d", m.top().typing, len(m.top().filtered))
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "1 of 3 rows") {
+		t.Error("status bar should show filtered count")
+	}
+	// Live update keeps the filter applied.
+	s := snap()
+	s.Rows = append(s.Rows, k8s.Row{Name: "d", UID: "4", Cells: []string{"d", "Pending", ""}})
+	m = feed(m, k8s.Update{Snapshot: s, Status: k8s.StatusLive})
+	if len(m.top().filtered) != 2 {
+		t.Errorf("filter not reapplied on update: %d rows", len(m.top().filtered))
+	}
+	// esc clears the filter instead of popping.
+	m, _ = press(m, "esc")
+	if m.top().filterActive() || len(m.top().filtered) != 4 || len(m.stack) != 1 {
+		t.Errorf("esc should clear the filter: active=%v rows=%d stack=%d", m.top().filterActive(), len(m.top().filtered), len(m.stack))
+	}
+}
+
+func TestFilterEscWhileTypingClears(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "/")
+	m = typeStr(m, "run")
+	m, _ = press(m, "esc")
+	if m.top().filterActive() || len(m.top().filtered) != 3 {
+		t.Error("esc while typing should clear and close the filter")
+	}
+	if lines := strings.Count(m.View().Content, "\n") + 1; lines != 24 {
+		t.Errorf("view has %d lines after clearing filter, want 24", lines)
+	}
+}
+
+func TestSelectionFollowsFilteredRows(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "down", "down") // on c
+	m, _ = press(m, "/")
+	m = typeStr(m, "run") // a and c match
+	if r, ok := m.top().selectedRow(); !ok || r.Name != "c" {
+		t.Errorf("selection should stay on c, got %+v", r)
+	}
+}
+
+func TestRowFilterIsSubstringNotFuzzy(t *testing.T) {
+	m, _ := newTest(t)
+	s := snap()
+	s.Rows = []k8s.Row{
+		{Name: "coredns-1", UID: "1", Cells: []string{"coredns-1", "Running", "10.0.0.1"}},
+		{Name: "etcd-control-plane", UID: "2", Cells: []string{"etcd-control-plane", "Running", "10.0.0.2"}},
+		{Name: "kube-proxy", UID: "3", Cells: []string{"kube-proxy", "Pending", "10.0.0.3"}},
+	}
+	m = feed(m, k8s.Update{Snapshot: s, Status: k8s.StatusLive})
+	m, _ = press(m, "/")
+	m = typeStr(m, "core")
+	if got := len(m.top().filtered); got != 1 || m.top().filtered[0].Name != "coredns-1" {
+		t.Errorf("'core' should match only coredns, got %d rows", got)
+	}
+	m, _ = press(m, "esc", "/")
+	m = typeStr(m, "RUN 10.0.0.2")
+	if got := len(m.top().filtered); got != 1 || m.top().filtered[0].Name != "etcd-control-plane" {
+		t.Errorf("multi-term case-insensitive filter got %d rows", got)
+	}
+	m, _ = press(m, "esc", "/")
+	m = typeStr(m, "cre") // scattered letters of coredns must not match
+	if got := len(m.top().filtered); got != 0 {
+		t.Errorf("'cre' matched %d rows; substring filter expected", got)
 	}
 }

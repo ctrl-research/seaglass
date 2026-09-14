@@ -108,8 +108,10 @@ Gate: I can open it against production and see pods update live.
   client and resets the stack.
 - [x] Navigation stack with breadcrumbs and `esc`. Hidden views stop
   their streams; popping restarts the stream.
-- [ ] "All namespaces" as a palette entry.
-- [ ] Row filter (`/`) with fuzzy match and highlight.
+- [x] "All namespaces" as a palette entry.
+- [x] Row filter (`/`): case-insensitive substring terms (fuzzy is too loose
+  over whole rows), live count, filter survives updates.
+  Match highlighting deferred: Bubbles table cells are plain strings.
 - [ ] Detail view (`d`): describe-style summary. YAML view (`y`) with syntax
   highlighting and copy-to-clipboard.
 - [ ] Column sort (`shift+letter` or a sort picker). Wide/narrow column toggle.

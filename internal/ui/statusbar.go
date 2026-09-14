@@ -15,8 +15,10 @@ type StatusBar struct {
 	// Crumbs is the navigation stack, outermost first.
 	Crumbs []string
 	Rows   int
-	State  string
-	Err    string
+	// Total is the unfiltered row count; shown when larger than Rows.
+	Total int
+	State string
+	Err   string
 	// Hint is shown on the right when there is no error, e.g. key help.
 	Hint string
 }
@@ -42,14 +44,18 @@ func (s StatusBar) Render(width int) string {
 		left += sep + crumbStyle.Render(c)
 	}
 
+	count := fmt.Sprintf("%d rows ", s.Rows)
+	if s.Total > s.Rows {
+		count = fmt.Sprintf("%d of %d rows ", s.Rows, s.Total)
+	}
 	var right string
 	switch {
 	case s.Err != "":
 		right = errStyle.Render(truncate(s.Err, width/2))
 	case s.State == "live":
-		right = barStyle.Render(fmt.Sprintf("%d rows ", s.Rows)) + liveStyle.Render("● live")
+		right = barStyle.Render(count) + liveStyle.Render("● live")
 	default:
-		right = barStyle.Render(fmt.Sprintf("%d rows ", s.Rows)) + warnStyle.Render("◌ "+s.State)
+		right = barStyle.Render(count) + warnStyle.Render("◌ "+s.State)
 	}
 	if s.Hint != "" && s.Err == "" {
 		right = sepStyle.Render(s.Hint+"  ") + right

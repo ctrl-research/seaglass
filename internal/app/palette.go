@@ -8,7 +8,6 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/sahilm/fuzzy"
 
 	"github.com/ctrl-research/seaglass/internal/k8s"
 )
@@ -86,6 +85,9 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 		search := strings.ToLower(strings.Join(append([]string{r.Name(), r.Kind, r.GroupVersion()}, r.ShortNames...), " "))
 		items = append(items, paletteItem{Kind: itemResource, Label: r.Name(), Detail: detail, Resource: r, search: search})
 	}
+	if len(namespaces) > 0 {
+		items = append(items, paletteItem{Kind: itemNamespace, Label: "all namespaces", Detail: "namespace · every namespace at once", Name: "", search: "ns namespace all -a"})
+	}
 	for _, ns := range namespaces {
 		items = append(items, paletteItem{Kind: itemNamespace, Label: ns, Detail: "namespace", Name: ns, search: strings.ToLower("ns namespace " + ns)})
 	}
@@ -117,47 +119,15 @@ func (p *palette) hide() {
 	p.input.Blur()
 }
 
-// filter recomputes matches. Every whitespace-separated term must fuzzy
-// match; results rank by summed score, then by original order.
+// filter recomputes matches, ranked by score then original order.
 func (p *palette) filter() {
-	q := strings.ToLower(strings.TrimSpace(p.input.Value()))
-	if q == "" {
-		p.matches = make([]int, len(p.items))
-		for i := range p.items {
-			p.matches[i] = i
-		}
-		p.clampCursor()
-		return
+	idx, scores := fuzzyFilter(p.input.Value(), p.search)
+	p.matches = idx
+	if scores != nil {
+		sort.SliceStable(p.matches, func(i, j int) bool {
+			return scores[p.matches[i]] > scores[p.matches[j]]
+		})
 	}
-	var scores map[int]int
-	for ti, term := range strings.Fields(q) {
-		found := map[int]int{}
-		for _, m := range fuzzy.Find(term, p.search) {
-			found[m.Index] = m.Score
-		}
-		if ti == 0 {
-			scores = found
-			continue
-		}
-		for idx := range scores {
-			if s, ok := found[idx]; ok {
-				scores[idx] += s
-			} else {
-				delete(scores, idx)
-			}
-		}
-	}
-	p.matches = p.matches[:0]
-	for idx := range scores {
-		p.matches = append(p.matches, idx)
-	}
-	sort.Slice(p.matches, func(i, j int) bool {
-		si, sj := scores[p.matches[i]], scores[p.matches[j]]
-		if si != sj {
-			return si > sj
-		}
-		return p.matches[i] < p.matches[j]
-	})
 	p.clampCursor()
 }
 

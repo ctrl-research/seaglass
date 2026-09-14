@@ -206,6 +206,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	top := m.top()
+	if top.typing {
+		cmd, _ := top.update(msg, m.width, m.bodyHeight())
+		return m, cmd
+	}
+
 	switch msg.String() {
 	case "ctrl+c", "q":
 		for _, v := range m.stack {
@@ -214,17 +220,22 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case ":", "ctrl+p":
 		cmd := m.palette.show()
-		v := m.top()
-		v.layout(m.width, m.bodyHeight(), v.selectedKey())
+		top.layout(m.width, m.bodyHeight(), top.selectedKey())
 		return m, cmd
-	case "esc":
+	}
+
+	// The view gets first refusal (it uses esc to clear its filter).
+	cmd, consumed := top.update(msg, m.width, m.bodyHeight())
+	if consumed {
+		return m, cmd
+	}
+	if msg.String() == "esc" {
 		if len(m.stack) > 1 {
 			return m, m.pop()
 		}
 		m.err = nil
-		return m, nil
 	}
-	return m, m.top().update(msg)
+	return m, nil
 }
 
 // choose acts on a palette selection.
@@ -316,9 +327,10 @@ func (m Model) View() tea.View {
 	bar := ui.StatusBar{
 		Namespace: m.namespace,
 		Crumbs:    crumbs,
-		Rows:      len(top.snapshot.Rows),
+		Rows:      len(top.filtered),
+		Total:     len(top.snapshot.Rows),
 		State:     top.status.String(),
-		Hint:      ": palette  esc back  q quit",
+		Hint:      ": palette  / filter  esc back  q quit",
 	}
 	if m.client != nil {
 		bar.Context = m.client.Context
@@ -336,7 +348,7 @@ func (m Model) View() tea.View {
 	if m.palette.open {
 		parts = append(parts, m.palette.view(m.width))
 	}
-	parts = append(parts, top.view(m.bodyHeight()), bar.Render(m.width))
+	parts = append(parts, top.view(m.width, m.bodyHeight()), bar.Render(m.width))
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, parts...))
 	if m.client != nil {
 		v.WindowTitle = "seaglass · " + m.client.Context
