@@ -21,8 +21,9 @@ type Options struct {
 	Namespace string // "" means all namespaces
 	Resource  k8s.Resource
 
-	// streamer overrides the client's stream for tests.
+	// streamer and getter override the client for tests.
 	streamer streamer
+	getter   getter
 	// contexts overrides kubeconfig context discovery for tests.
 	contexts []string
 }
@@ -31,10 +32,10 @@ type Options struct {
 // views, a command palette, and the cluster connection.
 type Model struct {
 	client    *k8s.Client
-	stream    streamer
+	deps      deps
 	namespace string
 
-	stack  []*resourceView
+	stack  []view
 	nextID int
 
 	palette    palette
@@ -72,21 +73,24 @@ type (
 func New(opts Options) Model {
 	m := Model{
 		client:    opts.Client,
-		stream:    opts.streamer,
+		deps:      deps{stream: opts.streamer, get: opts.getter},
 		namespace: opts.Namespace,
 		palette:   newPalette(),
 		contexts:  opts.contexts,
 	}
-	if m.stream == nil && opts.Client != nil {
-		m.stream = clientStreamer{opts.Client}
+	if m.deps.stream == nil && opts.Client != nil {
+		m.deps.stream = clientStreamer{opts.Client}
 	}
-	m.push(opts.Resource)
+	if m.deps.get == nil && opts.Client != nil {
+		m.deps.get = opts.Client
+	}
+	m.pushResource(opts.Resource)
 	return m
 }
 
 // Init starts the first stream and kicks off discovery.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.top().start(m.stream)}
+	cmds := []tea.Cmd{m.top().start(m.deps)}
 	cmds = append(cmds, m.discoverCmds()...)
 	if m.contexts == nil {
 		cmds = append(cmds, func() tea.Msg {
@@ -119,14 +123,33 @@ func (m Model) discoverCmds() []tea.Cmd {
 	}
 }
 
-func (m *Model) top() *resourceView { return m.stack[len(m.stack)-1] }
+func (m *Model) top() view { return m.stack[len(m.stack)-1] }
 
-// push adds a view for res on top of the stack. It does not start it.
-func (m *Model) push(res k8s.Resource) *resourceView {
+// pushResource adds a table view for res on top of the stack. It does not
+// start it.
+func (m *Model) pushResource(res k8s.Resource) *resourceView {
 	m.nextID++
 	v := newResourceView(m.nextID, res, m.namespace)
 	m.stack = append(m.stack, v)
 	return v
+}
+
+// pushObject adds an object view on top of the stack. It does not start it.
+func (m *Model) pushObject(res k8s.Resource, ns, name string, mode objMode) *objectView {
+	m.nextID++
+	v := newObjectView(m.nextID, res, ns, name, mode)
+	m.stack = append(m.stack, v)
+	return v
+}
+
+// currentResource is the resource of the nearest table view, or Pods.
+func (m *Model) currentResource() k8s.Resource {
+	for i := len(m.stack) - 1; i >= 0; i-- {
+		if rv, ok := m.stack[i].(*resourceView); ok {
+			return rv.res
+		}
+	}
+	return k8s.Pods
 }
 
 // bodyHeight is the height available to the top view.
@@ -144,19 +167,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.palette.width = msg.Width
-		v := m.top()
-		v.layout(m.width, m.bodyHeight(), v.selectedKey())
+		m.top().resize(m.width, m.bodyHeight())
 		return m, nil
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
 	case updateMsg:
-		v := m.top()
-		if msg.id != v.id {
-			return m, nil // from a view that was popped or restarted
+		// Only the top view is live; anything else was popped or restarted.
+		if rv, ok := m.top().(*resourceView); ok && rv.id == msg.id {
+			return m, rv.handle(msg, m.width, m.bodyHeight())
 		}
-		return m, v.handle(msg, m.width, m.bodyHeight())
+		return m, nil
+
+	case objectMsg:
+		if ov, ok := m.top().(*objectView); ok && ov.id == msg.id {
+			ov.handle(msg)
+		}
+		return m, nil
 
 	case resourcesMsg:
 		if msg.err != nil {
@@ -197,8 +225,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.palette.open {
 		chosen, closed, cmd := m.palette.update(msg)
 		if closed {
-			v := m.top()
-			v.layout(m.width, m.bodyHeight(), v.selectedKey())
+			m.top().resize(m.width, m.bodyHeight())
 		}
 		if chosen != nil {
 			return m, tea.Batch(cmd, m.choose(*chosen))
@@ -207,8 +234,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	top := m.top()
-	if top.typing {
-		cmd, _ := top.update(msg, m.width, m.bodyHeight())
+	if top.capturesInput() {
+		cmd, _ := top.handleKey(msg, m.width, m.bodyHeight())
 		return m, cmd
 	}
 
@@ -220,12 +247,37 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case ":", "ctrl+p":
 		cmd := m.palette.show()
-		top.layout(m.width, m.bodyHeight(), top.selectedKey())
+		top.resize(m.width, m.bodyHeight())
 		return m, cmd
 	}
 
-	// The view gets first refusal (it uses esc to clear its filter).
-	cmd, consumed := top.update(msg, m.width, m.bodyHeight())
+	// Drill into the selected row of a table view.
+	if rv, ok := top.(*resourceView); ok {
+		switch msg.String() {
+		case "enter", "d", "y":
+			row, ok := rv.selectedRow()
+			if !ok {
+				return m, nil
+			}
+			mode := modeDetail
+			if msg.String() == "y" {
+				mode = modeYAML
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			rv.stop()
+			m.pushObject(rv.res, ns, row.Name, mode)
+			return m, m.startTop()
+		}
+	}
+	if ov, ok := top.(*objectView); ok && msg.String() == "r" {
+		return m, ov.start(m.deps)
+	}
+
+	// The view gets first refusal (a table uses esc to clear its filter).
+	cmd, consumed := top.handleKey(msg, m.width, m.bodyHeight())
 	if consumed {
 		return m, cmd
 	}
@@ -242,12 +294,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) choose(it paletteItem) tea.Cmd {
 	switch it.Kind {
 	case itemResource:
-		if it.Resource.GVR == m.top().res.GVR {
+		if _, isTable := m.top().(*resourceView); isTable && it.Resource.GVR == m.currentResource().GVR {
 			return nil
 		}
 		m.top().stop()
-		v := m.push(it.Resource)
-		return m.startTop(v)
+		m.pushResource(it.Resource)
+		return m.startTop()
 	case itemNamespace:
 		return m.setNamespace(it.Name)
 	case itemContext:
@@ -264,16 +316,18 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 	return nil
 }
 
-func (m *Model) startTop(v *resourceView) tea.Cmd {
-	v.layout(m.width, m.bodyHeight(), "")
-	return v.start(m.stream)
+// startTop sizes and starts the top view.
+func (m *Model) startTop() tea.Cmd {
+	v := m.top()
+	v.resize(m.width, m.bodyHeight())
+	return v.start(m.deps)
 }
 
 // pop removes the top view and resumes the one beneath it.
 func (m *Model) pop() tea.Cmd {
 	m.top().stop()
 	m.stack = m.stack[:len(m.stack)-1]
-	return m.startTop(m.top())
+	return m.startTop()
 }
 
 // setNamespace switches namespace, keeping the current resource and
@@ -283,12 +337,13 @@ func (m *Model) setNamespace(ns string) tea.Cmd {
 		return nil
 	}
 	m.namespace = ns
-	res := m.top().res
+	res := m.currentResource()
 	for _, v := range m.stack {
 		v.stop()
 	}
 	m.stack = nil
-	return m.startTop(m.push(res))
+	m.pushResource(res)
+	return m.startTop()
 }
 
 // useClient swaps in a new cluster connection and resets everything.
@@ -297,17 +352,15 @@ func (m *Model) useClient(c *k8s.Client) tea.Cmd {
 		v.stop()
 	}
 	m.client = c
-	m.stream = clientStreamer{c}
+	m.deps = deps{stream: clientStreamer{c}, get: c}
 	m.namespace = c.Namespace
 	m.resources, m.namespaces = nil, nil
 	m.err = nil
-	res := k8s.Pods
-	if len(m.stack) > 0 {
-		res = m.top().res
-	}
+	res := m.currentResource()
 	m.stack = nil
 	m.rebuildPalette()
-	cmds := append([]tea.Cmd{m.startTop(m.push(res))}, m.discoverCmds()...)
+	m.pushResource(res)
+	cmds := append([]tea.Cmd{m.startTop()}, m.discoverCmds()...)
 	return tea.Batch(cmds...)
 }
 
@@ -321,18 +374,20 @@ func (m Model) View() tea.View {
 	top := m.top()
 
 	// Breadcrumbs describe scope, large to small: context › namespace ›
-	// resource. The view stack is history, not scope, so it is not shown;
-	// the hint names where esc goes instead.
-	hint := ": palette  / filter  q quit"
+	// resource › object. The view stack is history, not scope, so it is not
+	// shown; the hint names where esc goes instead.
+	hint := top.hint()
 	if len(m.stack) > 1 {
-		hint = ": palette  / filter  esc back to " + m.stack[len(m.stack)-2].res.Name() + "  q quit"
+		back := m.stack[len(m.stack)-2].crumbs()
+		hint += "  esc back to " + back[len(back)-1]
 	}
+	hint += "  q quit"
+	st := top.status()
 	bar := ui.StatusBar{
 		Namespace: m.namespace,
-		Crumbs:    []string{top.res.Name()},
-		Rows:      len(top.filtered),
-		Total:     len(top.snapshot.Rows),
-		State:     top.status.String(),
+		Crumbs:    top.crumbs(),
+		Count:     st.count,
+		State:     st.state,
 		Hint:      hint,
 	}
 	if m.client != nil {
@@ -343,15 +398,15 @@ func (m Model) View() tea.View {
 		bar.State = "connecting to " + m.connecting
 	case m.err != nil:
 		bar.Err = m.err.Error()
-	case top.err != nil:
-		bar.Err = top.err.Error()
+	case st.err != nil:
+		bar.Err = st.err.Error()
 	}
 
 	parts := []string{}
 	if m.palette.open {
 		parts = append(parts, m.palette.view(m.width))
 	}
-	parts = append(parts, top.view(m.width, m.bodyHeight()), bar.Render(m.width))
+	parts = append(parts, top.render(m.width, m.bodyHeight()), bar.Render(m.width))
 	v.SetContent(lipgloss.JoinVertical(lipgloss.Left, parts...))
 	if m.client != nil {
 		v.WindowTitle = "seaglass · " + m.client.Context

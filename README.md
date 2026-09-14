@@ -28,6 +28,9 @@ Debug logs go to `~/.local/state/seaglass/seaglass.log` (or `$XDG_STATE_HOME`).
 | `:` or `ctrl+p` | Command palette: fuzzy search resource types, namespaces, contexts |
 | `enter` | Open the selected palette item |
 | `/` | Filter rows: every word must appear somewhere in the row; `enter` keeps it, `esc` clears |
+| `enter` or `d` | Detail view of the selected object: metadata, status, conditions, containers |
+| `y` | YAML of the selected object, managed fields stripped |
+| In detail/YAML: `y`/`d` switch, `c` copy YAML, `r` reload, `g`/`G` top/bottom |
 | `esc` | Clear the filter, close the palette, or go back one view |
 | `j`/`k`, arrows, `pgup`/`pgdn`, `g`/`G` | Move in the table |
 | `q` or `ctrl+c` | Quit |
@@ -38,7 +41,7 @@ choosing a namespace keeps the current resource and resets the view stack;
 choosing a context reconnects.
 
 Status: M1 in progress. Any list+watch resource type, live updates,
-server-side columns, palette, navigation stack with breadcrumbs.
+server-side columns, palette, row filter, detail and YAML views.
 
 ## Driving the TUI headlessly
 

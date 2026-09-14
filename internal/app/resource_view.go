@@ -14,18 +14,6 @@ import (
 	"github.com/ctrl-research/seaglass/internal/ui"
 )
 
-// streamer is the slice of k8s.Client the view needs; tests inject a fake.
-type streamer interface {
-	Stream(ctx context.Context, res k8s.Resource, namespace string) <-chan k8s.Update
-}
-
-// clientStreamer adapts k8s.Client to streamer.
-type clientStreamer struct{ c *k8s.Client }
-
-func (s clientStreamer) Stream(ctx context.Context, res k8s.Resource, ns string) <-chan k8s.Update {
-	return s.c.Stream(ctx, res.GVR, ns)
-}
-
 // updateMsg carries one k8s.Update to the view with the matching id. Updates
 // from a view that has since been stopped are dropped by id.
 type updateMsg struct {
@@ -43,7 +31,7 @@ type resourceView struct {
 	updates <-chan k8s.Update
 
 	snapshot k8s.Snapshot
-	status   k8s.Status
+	status_  k8s.Status
 	err      error
 	colIdx   []int
 	table    table.Model
@@ -75,7 +63,7 @@ func newResourceView(id int, res k8s.Resource, ns string) *resourceView {
 		id:        id,
 		res:       res,
 		namespace: ns,
-		status:    k8s.StatusConnecting,
+		status_:   k8s.StatusConnecting,
 		table:     table.New(table.WithFocused(true), table.WithStyles(styles)),
 		filter:    fi,
 	}
@@ -129,12 +117,12 @@ func (v *resourceView) applyFilter() {
 
 // start begins streaming and returns the command that delivers the first
 // update. Calling start on a running view restarts the stream.
-func (v *resourceView) start(s streamer) tea.Cmd {
+func (v *resourceView) start(d deps) tea.Cmd {
 	v.stop()
 	ctx, cancel := context.WithCancel(context.Background())
 	v.cancel = cancel
-	v.updates = s.Stream(ctx, v.res, v.namespace)
-	v.status = k8s.StatusConnecting
+	v.updates = d.stream.Stream(ctx, v.res, v.namespace)
+	v.status_ = k8s.StatusConnecting
 	return v.wait()
 }
 
@@ -162,7 +150,7 @@ func (v *resourceView) wait() tea.Cmd {
 // handle applies an update and re-arms the wait.
 func (v *resourceView) handle(msg updateMsg, width, height int) tea.Cmd {
 	selected := v.selectedKey()
-	v.status = msg.Status
+	v.status_ = msg.Status
 	v.err = msg.Err
 	v.snapshot = msg.Snapshot
 	v.applyFilter()
@@ -227,9 +215,27 @@ func (v *resourceView) selectedRow() (k8s.Row, bool) {
 	return v.filtered[c], true
 }
 
-// update handles a key. consumed is false when the key was not meaningful
-// to the view and the caller may treat it as global.
-func (v *resourceView) update(msg tea.KeyPressMsg, width, height int) (cmd tea.Cmd, consumed bool) {
+func (v *resourceView) resize(width, height int) { v.layout(width, height, v.selectedKey()) }
+
+func (v *resourceView) crumbs() []string { return []string{v.res.Name()} }
+
+func (v *resourceView) capturesInput() bool { return v.typing }
+
+func (v *resourceView) status() viewStatus {
+	count := fmt.Sprintf("%d rows", len(v.filtered))
+	if len(v.snapshot.Rows) > len(v.filtered) {
+		count = fmt.Sprintf("%d of %d rows", len(v.filtered), len(v.snapshot.Rows))
+	}
+	return viewStatus{count: count, state: v.status_.String(), err: v.err}
+}
+
+func (v *resourceView) hint() string {
+	return ": palette  / filter  enter detail  y yaml"
+}
+
+// handleKey handles a key. consumed is false when the key was not
+// meaningful to the view and the caller may treat it as global.
+func (v *resourceView) handleKey(msg tea.KeyPressMsg, width, height int) (cmd tea.Cmd, consumed bool) {
 	if v.typing {
 		switch msg.String() {
 		case "esc":
@@ -275,7 +281,7 @@ func (v *resourceView) update(msg tea.KeyPressMsg, width, height int) (cmd tea.C
 	return cmd, true
 }
 
-func (v *resourceView) view(width, height int) string {
+func (v *resourceView) render(width, height int) string {
 	var body string
 	switch {
 	case len(v.snapshot.Columns) == 0 && v.err != nil:

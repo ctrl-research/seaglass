@@ -47,7 +47,7 @@ func TestFitColumnsShrinksWhenRequiredOverflow(t *testing.T) {
 }
 
 func TestStatusBarWidth(t *testing.T) {
-	s := StatusBar{Context: "homelab", Namespace: "default", Crumbs: []string{"pods", "deployments"}, Rows: 12, Hint: ": palette  esc back  q quit", State: "live"}
+	s := StatusBar{Context: "homelab", Namespace: "default", Crumbs: []string{"pods", "deployments"}, Count: "12 rows", Hint: ": palette  esc back  q quit", State: "live"}
 	for _, w := range []int{40, 80, 200} {
 		if got := visibleWidth(s.Render(w)); got != w {
 			t.Errorf("width %d: rendered %d", w, got)
@@ -56,9 +56,13 @@ func TestStatusBarWidth(t *testing.T) {
 }
 
 func TestStatusBarFilteredCount(t *testing.T) {
-	s := StatusBar{Context: "c", Namespace: "n", Crumbs: []string{"pods"}, Rows: 2, Total: 9, State: "live"}
+	s := StatusBar{Context: "c", Namespace: "n", Crumbs: []string{"pods"}, Count: "2 of 9 rows", State: "live"}
 	out := s.Render(80)
 	if !contains(out, "2 of 9 rows") {
 		t.Errorf("expected filtered count, got %q", out)
+	}
+	s.Count = ""
+	if out := stripANSI(s.Render(80)); contains(out, "rows") {
+		t.Errorf("empty count should hide rows, got %q", out)
 	}
 }

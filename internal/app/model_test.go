@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/ctrl-research/seaglass/internal/k8s"
@@ -33,25 +35,52 @@ var nodes = k8s.Resource{
 	GVR: schema.GroupVersionResource{Version: "v1", Resource: "nodes"}, Kind: "Node", ShortNames: []string{"no"},
 }
 
+// fakeGetter returns a canned object and records requests.
+type fakeGetter struct {
+	calls []string
+	obj   *unstructured.Unstructured
+	err   error
+}
+
+func (f *fakeGetter) Get(_ context.Context, res k8s.Resource, ns, name string) (*unstructured.Unstructured, error) {
+	f.calls = append(f.calls, res.Name()+"/"+ns+"/"+name)
+	return f.obj, f.err
+}
+
+// rv asserts the top view is a table view.
+func rv(m Model) *resourceView { return m.top().(*resourceView) }
+
 func newTest(t *testing.T) (Model, *fakeStreamer) {
 	t.Helper()
+	m, fs, _ := newTestFull(t)
+	return m, fs
+}
+
+func newTestFull(t *testing.T) (Model, *fakeStreamer, *fakeGetter) {
+	t.Helper()
 	fs := &fakeStreamer{}
+	fg := &fakeGetter{obj: &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]any{"name": "b", "namespace": "default", "uid": "2", "labels": map[string]any{"app": "web"}},
+		"status":   map[string]any{"phase": "Pending"},
+	}}}
 	m := New(Options{
 		Client:    &k8s.Client{Context: "test-ctx", Namespace: "default"},
 		Namespace: "default",
 		Resource:  k8s.Pods,
 		streamer:  fs,
+		getter:    fg,
 		contexts:  []string{"test-ctx", "other-ctx"},
 	})
 	// Init returns a batch; run the stream start directly instead so tests
 	// stay synchronous.
-	m.top().start(fs)
+	rv(m).start(m.deps)
 	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = mm.(Model)
 	mm, _ = m.Update(resourcesMsg{resources: []k8s.Resource{k8s.Pods, deployments, nodes, k8s.Namespaces}})
 	m = mm.(Model)
 	mm, _ = m.Update(namespacesMsg{names: []string{"default", "kube-system"}})
-	return mm.(Model), fs
+	return mm.(Model), fs, fg
 }
 
 func snap() k8s.Snapshot {
@@ -98,7 +127,7 @@ func typeStr(m Model, s string) Model {
 }
 
 func feed(m Model, u k8s.Update) Model {
-	mm, _ := m.Update(updateMsg{id: m.top().id, Update: u})
+	mm, _ := m.Update(updateMsg{id: rv(m).id, Update: u})
 	return mm.(Model)
 }
 
@@ -133,14 +162,14 @@ func TestSelectionSurvivesUpdate(t *testing.T) {
 	m, _ := newTest(t)
 	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
 	m, _ = press(m, "down")
-	if m.top().selectedKey() != "2" {
-		t.Fatalf("selected %q after down, want b", m.top().selectedKey())
+	if rv(m).selectedKey() != "2" {
+		t.Fatalf("selected %q after down, want b", rv(m).selectedKey())
 	}
 	s := snap()
 	s.Rows = append([]k8s.Row{{Name: "0", UID: "0", Cells: []string{"0", "Running", ""}}}, s.Rows...)
 	m = feed(m, k8s.Update{Snapshot: s, Status: k8s.StatusLive})
-	if m.top().selectedKey() != "2" {
-		t.Errorf("selection moved to %q after insert above", m.top().selectedKey())
+	if rv(m).selectedKey() != "2" {
+		t.Errorf("selection moved to %q after insert above", rv(m).selectedKey())
 	}
 }
 
@@ -158,8 +187,8 @@ func TestPaletteResourcePushAndPop(t *testing.T) {
 	if m.palette.open {
 		t.Error("palette should close on enter")
 	}
-	if len(m.stack) != 2 || m.top().res.Name() != "deployments" {
-		t.Fatalf("stack = %d, top = %s", len(m.stack), m.top().res.Name())
+	if len(m.stack) != 2 || rv(m).res.Name() != "deployments" {
+		t.Fatalf("stack = %d, top = %s", len(m.stack), rv(m).res.Name())
 	}
 	if got := fs.calls[len(fs.calls)-1]; got != "deployments/default" {
 		t.Errorf("stream started for %q", got)
@@ -176,8 +205,8 @@ func TestPaletteResourcePushAndPop(t *testing.T) {
 	}
 
 	m, _ = press(m, "esc")
-	if len(m.stack) != 1 || m.top().res.Name() != "pods" {
-		t.Fatalf("esc should pop back to pods, got %s", m.top().res.Name())
+	if len(m.stack) != 1 || rv(m).res.Name() != "pods" {
+		t.Fatalf("esc should pop back to pods, got %s", rv(m).res.Name())
 	}
 	if got := fs.calls[len(fs.calls)-1]; got != "pods/default" {
 		t.Errorf("pods stream not restarted after pop: %q", got)
@@ -208,8 +237,8 @@ func TestPaletteNamespaceResetsStack(t *testing.T) {
 		t.Fatalf("'ns kube' should select the kube-system namespace, got %+v", it)
 	}
 	m, _ = press(m, "enter")
-	if m.namespace != "kube-system" || len(m.stack) != 1 || m.top().res.Name() != "deployments" {
-		t.Fatalf("ns=%s stack=%d top=%s", m.namespace, len(m.stack), m.top().res.Name())
+	if m.namespace != "kube-system" || len(m.stack) != 1 || rv(m).res.Name() != "deployments" {
+		t.Fatalf("ns=%s stack=%d top=%s", m.namespace, len(m.stack), rv(m).res.Name())
 	}
 	if got := fs.calls[len(fs.calls)-1]; got != "deployments/kube-system" {
 		t.Errorf("stream = %q", got)
@@ -218,13 +247,13 @@ func TestPaletteNamespaceResetsStack(t *testing.T) {
 
 func TestStaleUpdateIgnored(t *testing.T) {
 	m, _ := newTest(t)
-	oldID := m.top().id
+	oldID := rv(m).id
 	m, _ = press(m, ":")
 	m = typeStr(m, "deploy")
 	m, _ = press(m, "enter")
 	mm, _ := m.Update(updateMsg{id: oldID, Update: k8s.Update{Snapshot: snap(), Status: k8s.StatusLive}})
 	m = mm.(Model)
-	if len(m.top().snapshot.Rows) != 0 {
+	if len(rv(m).snapshot.Rows) != 0 {
 		t.Error("update for a popped view leaked into the top view")
 	}
 }
@@ -282,12 +311,12 @@ func TestRowFilter(t *testing.T) {
 	m, _ := newTest(t)
 	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
 	m, _ = press(m, "/")
-	if !m.top().typing {
+	if !rv(m).typing {
 		t.Fatal("/ should start the filter")
 	}
 	m = typeStr(m, "pend")
-	if got := len(m.top().filtered); got != 1 || m.top().filtered[0].Name != "b" {
-		t.Fatalf("filter 'pend' -> %d rows (%+v)", got, m.top().filtered)
+	if got := len(rv(m).filtered); got != 1 || rv(m).filtered[0].Name != "b" {
+		t.Fatalf("filter 'pend' -> %d rows (%+v)", got, rv(m).filtered)
 	}
 	out := stripANSI(m.View().Content)
 	if !strings.Contains(out, "1 of 3") {
@@ -303,18 +332,18 @@ func TestRowFilter(t *testing.T) {
 			t.Fatal("q while typing a filter must not quit")
 		}
 	}
-	if m.top().filter.Value() != "pendq" {
-		t.Errorf("filter value = %q", m.top().filter.Value())
+	if rv(m).filter.Value() != "pendq" {
+		t.Errorf("filter value = %q", rv(m).filter.Value())
 	}
-	if len(m.top().filtered) != 0 || !strings.Contains(stripANSI(m.View().Content), "0 of 3") {
+	if len(rv(m).filtered) != 0 || !strings.Contains(stripANSI(m.View().Content), "0 of 3") {
 		t.Error("no rows should match 'pendq'")
 	}
 	// Backspace, then enter keeps the filter applied without focus.
 	mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	m = mm.(Model)
 	m, _ = press(m, "enter")
-	if m.top().typing || len(m.top().filtered) != 1 {
-		t.Fatalf("enter should keep filter: typing=%v rows=%d", m.top().typing, len(m.top().filtered))
+	if rv(m).typing || len(rv(m).filtered) != 1 {
+		t.Fatalf("enter should keep filter: typing=%v rows=%d", rv(m).typing, len(rv(m).filtered))
 	}
 	if !strings.Contains(stripANSI(m.View().Content), "1 of 3 rows") {
 		t.Error("status bar should show filtered count")
@@ -323,13 +352,13 @@ func TestRowFilter(t *testing.T) {
 	s := snap()
 	s.Rows = append(s.Rows, k8s.Row{Name: "d", UID: "4", Cells: []string{"d", "Pending", ""}})
 	m = feed(m, k8s.Update{Snapshot: s, Status: k8s.StatusLive})
-	if len(m.top().filtered) != 2 {
-		t.Errorf("filter not reapplied on update: %d rows", len(m.top().filtered))
+	if len(rv(m).filtered) != 2 {
+		t.Errorf("filter not reapplied on update: %d rows", len(rv(m).filtered))
 	}
 	// esc clears the filter instead of popping.
 	m, _ = press(m, "esc")
-	if m.top().filterActive() || len(m.top().filtered) != 4 || len(m.stack) != 1 {
-		t.Errorf("esc should clear the filter: active=%v rows=%d stack=%d", m.top().filterActive(), len(m.top().filtered), len(m.stack))
+	if rv(m).filterActive() || len(rv(m).filtered) != 4 || len(m.stack) != 1 {
+		t.Errorf("esc should clear the filter: active=%v rows=%d stack=%d", rv(m).filterActive(), len(rv(m).filtered), len(m.stack))
 	}
 }
 
@@ -339,7 +368,7 @@ func TestFilterEscWhileTypingClears(t *testing.T) {
 	m, _ = press(m, "/")
 	m = typeStr(m, "run")
 	m, _ = press(m, "esc")
-	if m.top().filterActive() || len(m.top().filtered) != 3 {
+	if rv(m).filterActive() || len(rv(m).filtered) != 3 {
 		t.Error("esc while typing should clear and close the filter")
 	}
 	if lines := strings.Count(m.View().Content, "\n") + 1; lines != 24 {
@@ -353,7 +382,7 @@ func TestSelectionFollowsFilteredRows(t *testing.T) {
 	m, _ = press(m, "down", "down") // on c
 	m, _ = press(m, "/")
 	m = typeStr(m, "run") // a and c match
-	if r, ok := m.top().selectedRow(); !ok || r.Name != "c" {
+	if r, ok := rv(m).selectedRow(); !ok || r.Name != "c" {
 		t.Errorf("selection should stay on c, got %+v", r)
 	}
 }
@@ -369,17 +398,135 @@ func TestRowFilterIsSubstringNotFuzzy(t *testing.T) {
 	m = feed(m, k8s.Update{Snapshot: s, Status: k8s.StatusLive})
 	m, _ = press(m, "/")
 	m = typeStr(m, "core")
-	if got := len(m.top().filtered); got != 1 || m.top().filtered[0].Name != "coredns-1" {
+	if got := len(rv(m).filtered); got != 1 || rv(m).filtered[0].Name != "coredns-1" {
 		t.Errorf("'core' should match only coredns, got %d rows", got)
 	}
 	m, _ = press(m, "esc", "/")
 	m = typeStr(m, "RUN 10.0.0.2")
-	if got := len(m.top().filtered); got != 1 || m.top().filtered[0].Name != "etcd-control-plane" {
+	if got := len(rv(m).filtered); got != 1 || rv(m).filtered[0].Name != "etcd-control-plane" {
 		t.Errorf("multi-term case-insensitive filter got %d rows", got)
 	}
 	m, _ = press(m, "esc", "/")
 	m = typeStr(m, "cre") // scattered letters of coredns must not match
-	if got := len(m.top().filtered); got != 0 {
+	if got := len(rv(m).filtered); got != 0 {
 		t.Errorf("'cre' matched %d rows; substring filter expected", got)
+	}
+}
+
+// openObject drives the fetch for the top object view synchronously.
+func openObject(m Model) Model {
+	ov := m.top().(*objectView)
+	cmd := ov.start(m.deps)
+	mm, _ := m.Update(cmd())
+	return mm.(Model)
+}
+
+func TestEnterOpensDetailAndEscReturns(t *testing.T) {
+	m, fs, fg := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "down") // b
+	m, cmd := press(m, "enter")
+	if cmd == nil {
+		t.Fatal("enter should start a fetch")
+	}
+	ov, ok := m.top().(*objectView)
+	if !ok || ov.name != "b" || ov.mode != modeDetail {
+		t.Fatalf("top = %T %+v", m.top(), m.top())
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "test-ctx › default › pods › b") {
+		t.Errorf("crumbs should include the object:\n%s", out)
+	}
+	if !strings.Contains(out, "loading Pod b") {
+		t.Errorf("should show loading state:\n%s", out)
+	}
+
+	mm, _ := m.Update(cmd())
+	m = mm.(Model)
+	if got := fg.calls[len(fg.calls)-1]; got != "pods/default/b" {
+		t.Errorf("fetched %q", got)
+	}
+	out = stripANSI(m.View().Content)
+	for _, want := range []string{"Kind:         Pod", "app=web", "phase:               Pending", "esc back to pods"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detail missing %q:\n%s", want, out)
+		}
+	}
+
+	m, _ = press(m, "y")
+	out = stripANSI(m.View().Content)
+	if !strings.Contains(out, "apiVersion: v1") || !strings.Contains(out, "phase: Pending") {
+		t.Errorf("yaml mode missing content:\n%s", out)
+	}
+	if !strings.Contains(out, "yaml") {
+		t.Errorf("status should say yaml:\n%s", out)
+	}
+
+	m, _ = press(m, "esc")
+	if _, ok := m.top().(*resourceView); !ok || len(m.stack) != 1 {
+		t.Fatalf("esc should return to the table, stack=%d", len(m.stack))
+	}
+	if got := fs.calls[len(fs.calls)-1]; got != "pods/default" {
+		t.Errorf("table stream not resumed: %q", got)
+	}
+	if rv(m).selectedKey() != "2" {
+		t.Errorf("selection lost on return: %q", rv(m).selectedKey())
+	}
+}
+
+func TestYOpensYAMLDirectly(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "y")
+	m = openObject(m)
+	if ov := m.top().(*objectView); ov.mode != modeYAML {
+		t.Errorf("mode = %v", ov.mode)
+	}
+	if lines := strings.Count(m.View().Content, "\n") + 1; lines != 24 {
+		t.Errorf("view has %d lines, want 24", lines)
+	}
+}
+
+func TestObjectFetchError(t *testing.T) {
+	m, _, fg := newTestFull(t)
+	fg.err = errors.New("pods \"b\" is forbidden")
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "enter")
+	m = openObject(m)
+	if !strings.Contains(stripANSI(m.View().Content), "forbidden") {
+		t.Error("fetch error should be shown")
+	}
+}
+
+func TestEnterWithNoRowsDoesNothing(t *testing.T) {
+	m, _ := newTest(t)
+	m, _ = press(m, "enter", "d", "y")
+	if len(m.stack) != 1 {
+		t.Error("no row selected, nothing should open")
+	}
+}
+
+func TestStaleObjectMsgIgnored(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "enter")
+	m, _ = press(m, "esc") // back before the fetch lands
+	mm, _ := m.Update(cmd())
+	m = mm.(Model)
+	if _, ok := m.top().(*resourceView); !ok {
+		t.Error("stale object message changed the top view")
+	}
+}
+
+func TestPaletteFromObjectViewPushesTable(t *testing.T) {
+	m, fs, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "enter")
+	m = openObject(m)
+	m, _ = press(m, ":")
+	m = typeStr(m, "deploy")
+	m, _ = press(m, "enter")
+	if rv(m).res.Name() != "deployments" || fs.calls[len(fs.calls)-1] != "deployments/default" {
+		t.Errorf("palette from object view: top=%s calls=%v", rv(m).res.Name(), fs.calls)
 	}
 }

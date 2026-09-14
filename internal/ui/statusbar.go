@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -12,11 +11,10 @@ import (
 type StatusBar struct {
 	Context   string
 	Namespace string
-	// Crumbs is the navigation stack, outermost first.
+	// Crumbs are scope segments after the namespace, largest first.
 	Crumbs []string
-	Rows   int
-	// Total is the unfiltered row count; shown when larger than Rows.
-	Total int
+	// Count is free text such as "9 rows"; empty hides it.
+	Count string
 	State string
 	Err   string
 	// Hint is shown on the right when there is no error, e.g. key help.
@@ -44,9 +42,9 @@ func (s StatusBar) Render(width int) string {
 		left += sep + crumbStyle.Render(c)
 	}
 
-	count := fmt.Sprintf("%d rows ", s.Rows)
-	if s.Total > s.Rows {
-		count = fmt.Sprintf("%d of %d rows ", s.Rows, s.Total)
+	count := ""
+	if s.Count != "" {
+		count = s.Count + " "
 	}
 	var right string
 	switch {

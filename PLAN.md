@@ -112,9 +112,15 @@ Gate: I can open it against production and see pods update live.
 - [x] Row filter (`/`): case-insensitive substring terms (fuzzy is too loose
   over whole rows), live count, filter survives updates.
   Match highlighting deferred: Bubbles table cells are plain strings.
-- [ ] Detail view (`d`): describe-style summary. YAML view (`y`) with syntax
-  highlighting and copy-to-clipboard.
+- [x] Detail view (`d`/`enter`): generic describe (metadata, scalar status,
+  conditions, containers) that works for every type. YAML view (`y`) with
+  heuristic highlighting, managedFields stripped, `c` copies via OSC52.
+  Object views fetch once; `r` reloads. Live single-object watch later.
 - [ ] Column sort (`shift+letter` or a sort picker). Wide/narrow column toggle.
+- [ ] Header: small ASCII logo at the top left, context/namespace/cluster
+  info beside it, separated from the table by a single horizontal rule.
+  Like k9s but shorter and without borders. Must collapse to one line or
+  disappear on short terminals.
 - [ ] Generated help overlay (`?`) from the keymap.
 - [ ] Persist last context/namespace/resource between runs.
 
