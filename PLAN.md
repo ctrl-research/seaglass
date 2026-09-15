@@ -201,8 +201,11 @@ reuse them.
 - [x] Events view per resource (`E`, involvedObject-filtered) and a
   cluster-wide events stream (palette `events`), warning rows highlighted.
   Threaded a field selector through the Table stream to reuse it.
-- Pod status decoration: CrashLoopBackOff, OOMKilled, ImagePullBackOff,
-  pending reasons surfaced in the row and detail view.
+- [x] Pod status decoration: the Status column is colored by severity
+  (CrashLoopBackOff/OOMKilled/ImagePullBackOff red, Pending/creating amber,
+  Running green); the detail view gains a Container status section with
+  per-container state, restart counts, and problem reasons incl. OOMKilled
+  read from lastState.
 
 Gate: I can diagnose a failing rollout without leaving the tool.
 

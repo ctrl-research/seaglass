@@ -53,6 +53,9 @@ type resourceView struct {
 	// warnCol, when >= 0, is the column index whose "Warning" value marks a
 	// row for warning styling (events Type column).
 	warnCol int
+	// statusCol, when >= 0, is a "Status" column colored by severity.
+	// -2 means "not yet resolved".
+	statusCol int
 }
 
 var (
@@ -214,9 +217,12 @@ func (v *resourceView) layout(width, height int, selectedKey string) {
 	}
 	// Events: resolve the Type column for warning highlighting and default
 	// to sorting most-recent first the first time columns arrive.
-	if v.res.GVR == k8s.Events.GVR && len(v.snapshot.Columns) > 0 {
-		if v.warnCol < 0 {
+	if len(v.snapshot.Columns) > 0 {
+		if v.res.GVR == k8s.Events.GVR && v.warnCol < 0 {
 			v.warnCol = resolveWarnCol(v.snapshot.Columns)
+		}
+		if v.statusCol == -2 {
+			v.statusCol = ui.StatusColumn(v.snapshot.Columns)
 		}
 	}
 	// Decorate the sorted column's title before fitting so the arrow is
@@ -244,9 +250,12 @@ func (v *resourceView) layout(width, height int, selectedKey string) {
 	// rows on SetColumns and panics when a new column has no cell.
 	v.table.SetRows(nil)
 	v.table.SetColumns(cols)
-	if v.warnCol >= 0 {
+	switch {
+	case v.warnCol >= 0:
 		v.table.SetRows(ui.ProjectRowsWarn(v.filtered, idx, v.warnCol))
-	} else {
+	case v.statusCol >= 0:
+		v.table.SetRows(ui.ProjectRowsStatus(v.filtered, idx, v.statusCol))
+	default:
 		v.table.SetRows(ui.ProjectRows(v.filtered, idx))
 	}
 

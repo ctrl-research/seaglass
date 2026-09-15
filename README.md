@@ -58,6 +58,11 @@ confirmation first: `y` runs it, `n` or `esc` cancels.
 | `?` | Help overlay listing every key for the current view |
 | `q` or `ctrl+c` | Quit |
 
+Pod and container statuses are colored by severity: healthy states green,
+transient ones amber, failures like CrashLoopBackOff, OOMKilled, and
+ImagePullBackOff red. An object's detail view shows per-container state,
+restart counts, and problem reasons.
+
 Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
 `ns all` returns to all namespaces, `ctx prod` narrows to contexts. The
 palette also has `quit` (also `exit` or `:q`) and `help` actions, an `events` cluster stream, and lists
