@@ -176,7 +176,10 @@ edit need bespoke code. This avoids writing the actions twice.
 - [x] Copy (`c`) the selected object's name, namespace, `namespace/name`,
   or a context- and namespace-scoped `kubectl get/describe/-o yaml`
   command to the clipboard via OSC52, chosen from a picker.
-- [ ] Rollout status inline.
+- [x] Rollout status (`R`) for Deployments, StatefulSets, DaemonSets: a
+  view that polls and shows kubectl-style progress until complete or
+  failed, with a spinner and elapsed time. A rollout restart opens it
+  automatically.
 
 Gate: k9s is uninstalled.
 

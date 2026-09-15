@@ -3,8 +3,11 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+
 	"fmt"
 	"time"
+
+	k8sjson "k8s.io/apimachinery/pkg/util/json"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
@@ -24,7 +27,7 @@ func (c *Client) Get(ctx context.Context, res Resource, namespace, name string) 
 		return nil, fmt.Errorf("get %s/%s: %w", res.Name(), name, err)
 	}
 	u := &unstructured.Unstructured{}
-	if err := json.Unmarshal(raw, &u.Object); err != nil {
+	if err := k8sjson.Unmarshal(raw, &u.Object); err != nil {
 		return nil, fmt.Errorf("decode %s/%s: %w", res.Name(), name, err)
 	}
 	return u, nil

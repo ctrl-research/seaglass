@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -391,6 +392,24 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case rolloutStatusMsg:
+		if rv, ok := m.top().(*rolloutView); ok && rv.id == msg.id {
+			return m, rv.handleStatus(msg)
+		}
+		return m, nil
+
+	case rolloutTickMsg:
+		if rv, ok := m.top().(*rolloutView); ok && rv.id == msg.id {
+			return m, rv.handleTick(msg)
+		}
+		return m, nil
+
+	case spinner.TickMsg:
+		if rv, ok := m.top().(*rolloutView); ok {
+			return m, rv.handleSpinner(msg)
+		}
+		return m, nil
+
 	case editPrepMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -487,7 +506,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		return m, m.setNotice(msg.summary)
+		notice := m.setNotice(msg.summary)
+		if msg.follow && k8s.Rolloutable(msg.tgt.res) {
+			return m, tea.Batch(notice, m.openRollout(msg.tgt))
+		}
+		return m, notice
 
 	case clearNoticeMsg:
 		if msg.seq == m.noticeSeq {
@@ -657,6 +680,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			rv.stop()
 			m.pushLogs(ns, row.Name)
 			return m, m.startTop()
+		case is(msg, keys.Rollout):
+			row, ok := rv.selectedRow()
+			if !ok || !k8s.Rolloutable(rv.res) {
+				return m, nil
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			rv.stop()
+			return m, m.openRollout(target{res: rv.res, namespace: ns, name: row.Name})
 		case is(msg, keys.Sort):
 			if len(rv.snapshot.Columns) == 0 {
 				return m, nil
@@ -798,6 +832,17 @@ func (m *Model) shell(tgt target, container string) tea.Cmd {
 	v := newShellView(m.nextID, tgt.namespace, tgt.name, container)
 	m.stack = append(m.stack, v)
 	return m.startTop()
+}
+
+// openRollout pushes a rollout-status view and starts it, stopping the
+// view beneath so it does not keep streaming while hidden.
+func (m *Model) openRollout(tgt target) tea.Cmd {
+	m.top().stop()
+	m.nextID++
+	v := newRolloutView(m.nextID, tgt.res, tgt.namespace, tgt.name)
+	m.stack = append(m.stack, v)
+	v.resize(m.width, m.bodyHeight())
+	return v.start(m.deps)
 }
 
 // setNotice shows a transient success message for a few seconds.

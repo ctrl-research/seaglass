@@ -2,9 +2,11 @@ package k8s
 
 import (
 	"context"
-	"encoding/json"
+
 	"fmt"
 	"time"
+
+	k8sjson "k8s.io/apimachinery/pkg/util/json"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -31,7 +33,7 @@ func (c *Client) Update(ctx context.Context, res Resource, namespace, name strin
 		return nil, ErrEditInvalid{Detail: "not valid YAML: " + err.Error()}
 	}
 	obj := &unstructured.Unstructured{}
-	if err := json.Unmarshal(raw, &obj.Object); err != nil {
+	if err := k8sjson.Unmarshal(raw, &obj.Object); err != nil {
 		return nil, ErrEditInvalid{Detail: "not a Kubernetes object: " + err.Error()}
 	}
 	if obj.GetName() != name {
@@ -56,7 +58,7 @@ func (c *Client) Update(ctx context.Context, res Resource, namespace, name strin
 		}
 	}
 	out := &unstructured.Unstructured{}
-	if err := json.Unmarshal(result, &out.Object); err != nil {
+	if err := k8sjson.Unmarshal(result, &out.Object); err != nil {
 		return nil, fmt.Errorf("decode updated %s/%s: %w", res.Name(), name, err)
 	}
 	return out, nil
