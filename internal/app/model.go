@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,12 +40,13 @@ type Options struct {
 
 	// streamer, getter, patcher, logger, and execer override the client
 	// for tests.
-	streamer streamer
-	getter   getter
-	patcher  patcher
-	logger   logger
-	execer   execer
-	editer   editor
+	streamer  streamer
+	getter    getter
+	patcher   patcher
+	logger    logger
+	execer    execer
+	editer    editor
+	forwarder forwarder
 	// contexts overrides kubeconfig context discovery for tests.
 	contexts []string
 }
@@ -70,6 +72,8 @@ type Model struct {
 	confirm    *pendingAction
 	prompt     prompt
 	execTarget *target // pod awaiting a container choice for a shell
+	fwdTarget  *target // pod awaiting a port choice for a forward
+	forwards   forwards
 	notice     string
 	noticeSeq  int
 
@@ -118,7 +122,7 @@ type (
 func New(opts Options) Model {
 	m := Model{
 		client:    opts.Client,
-		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger, exec: opts.execer, edit: opts.editer},
+		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger, exec: opts.execer, edit: opts.editer, fwd: opts.forwarder},
 		saveDir:   opts.SaveDir,
 		namespace: opts.Namespace,
 		palette:   newPalette(),
@@ -144,6 +148,9 @@ func New(opts Options) Model {
 	}
 	if m.deps.edit == nil && opts.Client != nil {
 		m.deps.edit = opts.Client
+	}
+	if m.deps.fwd == nil && opts.Client != nil {
+		m.deps.fwd = opts.Client
 	}
 	if m.saveDir == "" {
 		m.saveDir = "."
@@ -404,6 +411,30 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.setNotice(msg.summary)
 
+	case fwdContainersMsg:
+		return m.handleFwdContainers(msg)
+
+	case forwardStartedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.forwards.nextID++
+		msg.af.id = m.forwards.nextID
+		m.forwards.add(msg.af)
+		return m, tea.Batch(
+			watchForward(msg.af),
+			m.setNotice(fmt.Sprintf("forwarding %s → %s:%d", msg.af.pf.Addr(), msg.af.label, msg.af.remote)),
+		)
+
+	case forwardDiedMsg:
+		if af := m.forwards.remove(msg.id); af != nil {
+			if msg.err != nil {
+				m.err = fmt.Errorf("port-forward %s stopped: %w", af.label, msg.err)
+			}
+		}
+		return m, nil
+
 	case logLinesMsg:
 		if lv, ok := m.top().(*logsView); ok && lv.id == msg.id {
 			return m, lv.handleLines(msg)
@@ -494,6 +525,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if submitted {
 			p := m.prompt.pending
 			p.input = value
+			// A port-forward prompt (pod with no declared ports) starts a
+			// forward rather than patching.
+			if m.fwdTarget != nil && p.act.Name == "port-forward" {
+				tgt := *m.fwdTarget
+				m.fwdTarget = nil
+				port, _ := strconv.Atoi(value)
+				return m, tea.Batch(cmd, startForward(m.deps.fwd, tgt.res, tgt.namespace, tgt.name, 0, uint16(port)))
+			}
 			if p.act.Confirm {
 				m.confirm = &p
 				return m, cmd
@@ -509,6 +548,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.top().resize(m.width, m.bodyHeight())
 			if chosen == nil {
 				m.execTarget = nil
+				m.fwdTarget = nil
 			}
 		}
 		if chosen != nil {
@@ -552,6 +592,29 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch {
+		case is(msg, keys.Forwards):
+			row, ok := rv.selectedRow()
+			if !ok {
+				return m, nil
+			}
+			if rv.res.GVR != k8s.Pods.GVR {
+				return m, m.setNotice("port-forward opens from a pod; select one in the pods view")
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			tgt := target{res: rv.res, namespace: ns, name: row.Name}
+			get := m.deps.get
+			return m, func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				obj, err := get.Get(ctx, k8s.Pods, tgt.namespace, tgt.name)
+				if err != nil {
+					return fwdContainersMsg{tgt: tgt, err: err}
+				}
+				return fwdContainersMsg{tgt: tgt, ports: k8s.ContainerPorts(obj)}
+			}
 		case is(msg, keys.Shell):
 			row, ok := rv.selectedRow()
 			if !ok {
@@ -631,6 +694,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, ov.start(m.deps)
 		case is(msg, keys.Edit):
 			return m, prepareEdit(m.deps.edit, m.saveDir, target{res: ov.res, namespace: ov.namespace, name: ov.name})
+		}
+	}
+	if fv, ok := top.(*forwardsView); ok {
+		switch {
+		case is(msg, keys.Delete), is(msg, keys.Accept):
+			if af := fv.selected(); af != nil {
+				if af.cancel != nil {
+					af.cancel()
+				}
+				af.pf.Stop()
+				m.forwards.remove(af.id)
+				return m, m.setNotice("stopped forward " + af.pf.Addr())
+			}
+			return m, nil
 		}
 	}
 	if lv, ok := top.(*logsView); ok {
@@ -752,6 +829,13 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 			return lv.setContainer(it.Name)
 		}
 		return nil
+	case itemPort:
+		if m.fwdTarget == nil {
+			return nil
+		}
+		tgt := *m.fwdTarget
+		m.fwdTarget = nil
+		return startForward(m.deps.fwd, tgt.res, tgt.namespace, tgt.name, 0, uint16(it.Index))
 	case itemSince:
 		if lv, ok := m.top().(*logsView); ok {
 			return lv.setSince(it.Since)
@@ -766,6 +850,8 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 			return tea.Quit
 		case actionHelp:
 			m.showHelp = true
+		case actionForwards:
+			m.openForwards()
 		default:
 			if name, ok := strings.CutPrefix(it.Name, "act:"); ok {
 				if a, found := actionByName(name); found {
@@ -841,7 +927,15 @@ func (m *Model) useClient(c *k8s.Client) tea.Cmd {
 		v.stop()
 	}
 	m.client = c
-	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c, logs: c, exec: c, edit: c}
+	// Existing forwards belong to the old cluster; tear them down.
+	for _, af := range m.forwards.list {
+		if af.cancel != nil {
+			af.cancel()
+		}
+		af.pf.Stop()
+	}
+	m.forwards = forwards{}
+	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c, logs: c, exec: c, edit: c, fwd: c}
 	m.namespace = c.Namespace
 	m.resources, m.namespaces = nil, nil
 	m.serverVersion = ""
@@ -878,6 +972,7 @@ func (m Model) View() tea.View {
 		Namespace: m.namespace,
 		Crumbs:    top.crumbs(),
 		Count:     st.count,
+		Forwards:  m.forwards.count(),
 		State:     st.state,
 		Hint:      top.hint(),
 		Back:      back,

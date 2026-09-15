@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ const (
 	itemContainer
 	itemSince
 	itemExec
+	itemPort
 )
 
 func (k itemKind) String() string {
@@ -43,6 +45,8 @@ func (k itemKind) String() string {
 		return "since"
 	case itemExec:
 		return "shell"
+	case itemPort:
+		return "port"
 	default:
 		return "context"
 	}
@@ -50,8 +54,9 @@ func (k itemKind) String() string {
 
 // Palette actions.
 const (
-	actionQuit = "quit"
-	actionHelp = "help"
+	actionQuit     = "quit"
+	actionHelp     = "help"
+	actionForwards = "forwards"
 )
 
 // paletteItem is one selectable entry.
@@ -122,9 +127,19 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 		items = append(items, paletteItem{Kind: itemContext, Label: c, Detail: "context", Name: c, search: strings.ToLower("ctx context " + c)})
 	}
 	items = append(items,
+		paletteItem{Kind: itemAction, Label: "port-forwards", Detail: "list and cancel active port-forwards", Name: actionForwards, search: "port forwards proxy tunnel"},
 		paletteItem{Kind: itemAction, Label: "help", Detail: "show every key for this view", Name: actionHelp, search: "help keys ?"},
 		paletteItem{Kind: itemAction, Label: "quit", Detail: "exit seaglass", Name: actionQuit, search: "quit exit q :q"},
 	)
+	return items
+}
+
+// portItems builds the remote-port picker for a forward.
+func portItems(ports []uint16) []paletteItem {
+	items := make([]paletteItem, len(ports))
+	for i, p := range ports {
+		items[i] = paletteItem{Kind: itemPort, Label: strconv.Itoa(int(p)), Detail: "forward this container port", Index: int(p), search: strconv.Itoa(int(p)) + " port"}
+	}
 	return items
 }
 

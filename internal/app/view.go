@@ -34,6 +34,7 @@ type deps struct {
 	logs   logger
 	exec   execer
 	edit   editor
+	fwd    forwarder
 }
 
 // viewStatus is what a view contributes to the status bar.

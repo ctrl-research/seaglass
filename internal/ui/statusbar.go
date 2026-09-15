@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -15,8 +16,10 @@ type StatusBar struct {
 	Crumbs []string
 	// Count is free text such as "9 rows"; empty hides it.
 	Count string
-	State string
-	Err   string
+	// Forwards, when > 0, shows a port-forward indicator.
+	Forwards int
+	State    string
+	Err      string
 	// Notice is a transient success message, shown in place of the hint.
 	Notice string
 	// Hint is key help shown on the right when there is room and no error.
@@ -50,6 +53,9 @@ func (s StatusBar) Render(width int) string {
 	count := ""
 	if s.Count != "" {
 		count = s.Count + " "
+	}
+	if s.Forwards > 0 {
+		count = fmt.Sprintf("⇄%d  ", s.Forwards) + count
 	}
 	var right string
 	switch {
