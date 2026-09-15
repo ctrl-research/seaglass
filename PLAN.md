@@ -190,7 +190,10 @@ jump kinds. Implement them as the jump engine (see M4) with the built-in
 Kubernetes relationships as the default rule set, so operator presets
 reuse them.
 
-- Owner jump (`o`): Pod → ReplicaSet → Deployment, Job → CronJob, etc.
+- [x] Owner jump (`o`) from a table row or object view: follows the
+  controller ownerReference to the owner's detail, resolving its kind
+  via discovery; repeatable to walk up (Pod → ReplicaSet → Deployment).
+  Built as a generic jump the related jumps and M4 config will reuse.
 - Related jump (`shift+r`): Service → Endpoints → Pods, Deployment → Pods
   by selector, Pod → Node, Node → Pods, ConfigMap/Secret → mounting Pods.
 - [x] Events view per resource (`E`, involvedObject-filtered) and a
