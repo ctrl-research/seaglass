@@ -67,6 +67,11 @@ type (
 		id  int
 		err error
 	}
+	// forwardStoppedMsg reports a user-cancelled forward.
+	forwardStoppedMsg struct {
+		id   int
+		addr string
+	}
 )
 
 // handleFwdContainers decides how to gather the remote port for a forward:

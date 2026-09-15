@@ -69,7 +69,7 @@ type Model struct {
 	connecting string // context name while switching, "" otherwise
 	err        error
 	showHelp   bool
-	confirm    *pendingAction
+	confirm    *confirmDialog
 	prompt     prompt
 	execTarget *target // pod awaiting a container choice for a shell
 	fwdTarget  *target // pod awaiting a port choice for a forward
@@ -435,6 +435,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case forwardStoppedMsg:
+		m.forwards.remove(msg.id)
+		return m, m.setNotice("stopped forward " + msg.addr)
+
 	case logLinesMsg:
 		if lv, ok := m.top().(*logsView); ok && lv.id == msg.id {
 			return m, lv.handleLines(msg)
@@ -505,11 +509,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.confirm != nil {
 		switch msg.String() {
 		case "y", "Y":
-			p := *m.confirm
+			d := m.confirm
 			m.confirm = nil
-			return m, runAction(m.deps.patch, p)
+			return m, d.run(d.force)
 		case "f", "F":
-			if m.confirm.act.Force {
+			if m.confirm.hasForce {
 				m.confirm.force = !m.confirm.force
 			}
 		case "n", "N", "esc", "q", "ctrl+c":
@@ -534,7 +538,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmd, startForward(m.deps.fwd, tgt.res, tgt.namespace, tgt.name, 0, uint16(port)))
 			}
 			if p.act.Confirm {
-				m.confirm = &p
+				m.confirm = actionConfirm(m.deps.patch, p)
 				return m, cmd
 			}
 			return m, tea.Batch(cmd, runAction(m.deps.patch, p))
@@ -700,12 +704,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch {
 		case is(msg, keys.Delete), is(msg, keys.Accept):
 			if af := fv.selected(); af != nil {
-				if af.cancel != nil {
-					af.cancel()
-				}
-				af.pf.Stop()
-				m.forwards.remove(af.id)
-				return m, m.setNotice("stopped forward " + af.pf.Addr())
+				m.confirm = cancelForwardConfirm(af)
 			}
 			return m, nil
 		}
@@ -770,7 +769,7 @@ func (m *Model) trigger(a action, rv *resourceView) tea.Cmd {
 		return cmd
 	}
 	if a.Confirm {
-		m.confirm = &pa
+		m.confirm = actionConfirm(m.deps.patch, pa)
 		return nil
 	}
 	return runAction(m.deps.patch, pa)
@@ -1003,18 +1002,14 @@ func (m Model) View() tea.View {
 	}
 	switch {
 	case m.confirm != nil:
-		p := m.confirm
+		d := m.confirm
 		bar.Hint, bar.Back = "y confirm  n cancel", ""
 		var toggles []ui.Toggle
-		if p.act.Force {
+		if d.hasForce {
 			bar.Hint = "y confirm  f force  n cancel"
-			toggles = append(toggles, ui.Toggle{Key: "f", Label: "force (grace period 0)", On: p.force})
+			toggles = append(toggles, ui.Toggle{Key: "f", Label: d.forceLabel, On: d.force})
 		}
-		detail := p.tgt.String()
-		if p.act.Input != nil {
-			detail = p.act.Input.Label + ": " + p.input
-		}
-		parts = append(parts, ui.Confirm(p.question(), detail, toggles, m.width, m.bodyHeight()))
+		parts = append(parts, ui.Confirm(d.title, d.detail, toggles, m.width, m.bodyHeight()))
 	case m.showHelp:
 		bar.Hint, bar.Back = "? or esc closes help", ""
 		parts = append(parts, ui.RenderHelp(m.helpSections(), m.width, m.bodyHeight()))
