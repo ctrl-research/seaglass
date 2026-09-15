@@ -33,6 +33,14 @@ var Pods = Resource{
 	ShortNames: []string{"po"},
 }
 
+// Events is the core events resource.
+var Events = Resource{
+	GVR:        schema.GroupVersionResource{Version: "v1", Resource: "events"},
+	Kind:       "Event",
+	Namespaced: true,
+	ShortNames: []string{"ev"},
+}
+
 // Namespaces is the namespace resource, used by the palette.
 var Namespaces = Resource{
 	GVR:        schema.GroupVersionResource{Version: "v1", Resource: "namespaces"},
@@ -114,7 +122,7 @@ func (c *Client) Resources(ctx context.Context) ([]Resource, error) {
 // NamespaceNames lists namespace names in the cluster.
 func (c *Client) NamespaceNames(ctx context.Context) ([]string, error) {
 	st := newStore()
-	if _, err := c.list(ctx, Namespaces.GVR, "", st); err != nil {
+	if _, err := c.list(ctx, Namespaces.GVR, "", "", st); err != nil {
 		return nil, err
 	}
 	snap := st.snapshot()

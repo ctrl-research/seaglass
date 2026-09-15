@@ -24,9 +24,11 @@ type updateMsg struct {
 
 // resourceView is a live table of one resource in one namespace.
 type resourceView struct {
-	id        int
-	res       k8s.Resource
-	namespace string // "" means all namespaces (or cluster scope)
+	id            int
+	res           k8s.Resource
+	namespace     string // "" means all namespaces (or cluster scope)
+	fieldSelector string // optional server-side filter (e.g. events)
+	title         string // crumb label override (e.g. "events")
 
 	cancel  context.CancelFunc
 	updates <-chan k8s.Update
@@ -47,6 +49,9 @@ type resourceView struct {
 	sortCol  int
 	sortDesc bool
 	colMode  ui.ColumnMode
+	// warnCol, when >= 0, is the column index whose "Warning" value marks a
+	// row for warning styling (events Type column).
+	warnCol int
 }
 
 var (
@@ -157,7 +162,7 @@ func (v *resourceView) start(d deps) tea.Cmd {
 	v.stop()
 	ctx, cancel := context.WithCancel(context.Background())
 	v.cancel = cancel
-	v.updates = d.stream.Stream(ctx, v.res, v.namespace)
+	v.updates = d.stream.Stream(ctx, v.res, v.namespace, v.fieldSelector)
 	v.connStatus = k8s.StatusConnecting
 	return v.wait()
 }
@@ -206,6 +211,13 @@ func (v *resourceView) layout(width, height int, selectedKey string) {
 	if v.filtered == nil {
 		v.filtered = v.snapshot.Rows
 	}
+	// Events: resolve the Type column for warning highlighting and default
+	// to sorting most-recent first the first time columns arrive.
+	if v.res.GVR == k8s.Events.GVR && len(v.snapshot.Columns) > 0 {
+		if v.warnCol < 0 {
+			v.warnCol = resolveWarnCol(v.snapshot.Columns)
+		}
+	}
 	// Decorate the sorted column's title before fitting so the arrow is
 	// counted in its width.
 	columns := v.snapshot.Columns
@@ -231,7 +243,11 @@ func (v *resourceView) layout(width, height int, selectedKey string) {
 	// rows on SetColumns and panics when a new column has no cell.
 	v.table.SetRows(nil)
 	v.table.SetColumns(cols)
-	v.table.SetRows(ui.ProjectRows(v.filtered, idx))
+	if v.warnCol >= 0 {
+		v.table.SetRows(ui.ProjectRowsWarn(v.filtered, idx, v.warnCol))
+	} else {
+		v.table.SetRows(ui.ProjectRows(v.filtered, idx))
+	}
 
 	if selectedKey != "" {
 		for i, r := range v.filtered {
@@ -268,7 +284,12 @@ func (v *resourceView) selectedRow() (k8s.Row, bool) {
 
 func (v *resourceView) resize(width, height int) { v.layout(width, height, v.selectedKey()) }
 
-func (v *resourceView) crumbs() []string { return []string{v.res.Name()} }
+func (v *resourceView) crumbs() []string {
+	if v.title != "" {
+		return []string{v.title}
+	}
+	return []string{v.res.Name()}
+}
 
 func (v *resourceView) capturesInput() bool { return v.typing }
 
@@ -291,7 +312,7 @@ func (v *resourceView) hint() string {
 func (v *resourceView) help() []helpSection {
 	km := v.table.KeyMap
 	return []helpSection{
-		{"Table", []key.Binding{keys.Filter, keys.Sort, keys.Reverse, keys.Columns, keys.Rollout, keys.Detail, keys.YAML, keys.Edit, keys.CopyRef, keys.Logs, keys.Shell, keys.Forwards}},
+		{"Table", []key.Binding{keys.Filter, keys.Sort, keys.Reverse, keys.Columns, keys.Rollout, keys.Detail, keys.YAML, keys.Edit, keys.CopyRef, keys.Events, keys.Logs, keys.Shell, keys.Forwards}},
 		{"Move", []key.Binding{km.LineUp, km.LineDown, km.PageUp, km.PageDown, km.HalfPageUp, km.HalfPageDown, km.GotoTop, km.GotoBottom}},
 	}
 }

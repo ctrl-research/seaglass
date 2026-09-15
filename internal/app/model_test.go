@@ -34,8 +34,12 @@ type fakeStreamer struct {
 	chans []chan k8s.Update
 }
 
-func (f *fakeStreamer) Stream(ctx context.Context, res k8s.Resource, ns string) <-chan k8s.Update {
-	f.calls = append(f.calls, res.Name()+"/"+ns)
+func (f *fakeStreamer) Stream(ctx context.Context, res k8s.Resource, ns, fieldSelector string) <-chan k8s.Update {
+	call := res.Name() + "/" + ns
+	if fieldSelector != "" {
+		call += "?" + fieldSelector
+	}
+	f.calls = append(f.calls, call)
 	ch := make(chan k8s.Update, 4)
 	f.chans = append(f.chans, ch)
 	go func() { <-ctx.Done(); close(ch) }()
@@ -2082,5 +2086,72 @@ func TestPodsNotRolloutable(t *testing.T) {
 	m, cmd := press(m, "R")
 	if cmd != nil || len(m.stack) != 1 {
 		t.Error("R on pods should do nothing")
+	}
+}
+
+func eventsSnap() k8s.Snapshot {
+	return k8s.Snapshot{
+		Columns: []k8s.Column{{Name: "Last Seen"}, {Name: "Type"}, {Name: "Reason"}, {Name: "Object"}, {Name: "Message"}},
+		Rows: []k8s.Row{
+			{Name: "e1", Namespace: "default", UID: "e1", Cells: []string{"2m", "Normal", "Scheduled", "pod/a", "assigned"}},
+			{Name: "e2", Namespace: "default", UID: "e2", Cells: []string{"30s", "Warning", "BackOff", "pod/a", "Back-off restarting"}},
+		},
+	}
+}
+
+func TestEventsForObject(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "E")
+	if cmd == nil {
+		t.Fatal("E should open events")
+	}
+	rv, ok := m.top().(*resourceView)
+	if !ok || rv.res.GVR != k8s.Events.GVR {
+		t.Fatalf("top should be an events view, got %T", m.top())
+	}
+	// Streamed with an involvedObject selector for the selected pod (uid "1").
+	fs := m.deps.stream.(*fakeStreamer)
+	last := fs.calls[len(fs.calls)-1]
+	if !strings.Contains(last, "events/default?involvedObject.uid=1") {
+		t.Errorf("events stream call = %q", last)
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "› events: a") {
+		t.Errorf("crumb should name the object:\n%s", stripANSI(m.View().Content))
+	}
+	// Feed events; the warning row is colored (contains an ANSI code).
+	m = feed(m, k8s.Update{Snapshot: eventsSnap(), Status: k8s.StatusLive})
+	rv = m.top().(*resourceView)
+	if rv.warnCol != 1 {
+		t.Errorf("warn column = %d, want 1 (Type)", rv.warnCol)
+	}
+	raw := m.View().Content
+	if !strings.Contains(stripANSI(raw), "Back-off restarting") {
+		t.Error("warning event row missing")
+	}
+	// esc returns to the pods table.
+	m, _ = press(m, "esc")
+	if _, ok := m.top().(*resourceView); !ok || m.top().(*resourceView).res.GVR != k8s.Pods.GVR {
+		t.Error("esc should return to pods")
+	}
+}
+
+func TestClusterEventsAction(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	m = typeStr(m, "events")
+	it, ok := m.palette.selected()
+	if !ok || it.Name != actionEvents {
+		t.Fatalf("events action not first, got %+v", it)
+	}
+	m, _ = press(m, "enter")
+	rv, ok := m.top().(*resourceView)
+	if !ok || rv.res.GVR != k8s.Events.GVR || rv.fieldSelector != "" {
+		t.Fatalf("cluster events view wrong: %T sel=%q", m.top(), rv.fieldSelector)
+	}
+	fs := m.deps.stream.(*fakeStreamer)
+	if last := fs.calls[len(fs.calls)-1]; last != "events/default" {
+		t.Errorf("cluster events stream = %q", last)
 	}
 }

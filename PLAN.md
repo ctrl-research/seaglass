@@ -193,8 +193,9 @@ reuse them.
 - Owner jump (`o`): Pod → ReplicaSet → Deployment, Job → CronJob, etc.
 - Related jump (`shift+r`): Service → Endpoints → Pods, Deployment → Pods
   by selector, Pod → Node, Node → Pods, ConfigMap/Secret → mounting Pods.
-- Events view per resource (`shift+e`) and a cluster-wide events stream
-  sorted by last seen with warning highlighting.
+- [x] Events view per resource (`E`, involvedObject-filtered) and a
+  cluster-wide events stream (palette `events`), warning rows highlighted.
+  Threaded a field selector through the Table stream to reuse it.
 - Pod status decoration: CrashLoopBackOff, OOMKilled, ImagePullBackOff,
   pending reasons surfaced in the row and detail view.
 

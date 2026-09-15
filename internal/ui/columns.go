@@ -2,6 +2,8 @@
 package ui
 
 import (
+	"strings"
+
 	"charm.land/bubbles/v2/table"
 	"charm.land/lipgloss/v2"
 
@@ -144,4 +146,31 @@ func sortInts(a []int) {
 			a[j], a[j-1] = a[j-1], a[j]
 		}
 	}
+}
+
+// WarnStyle colors a warning event row.
+var warnRowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
+// ProjectRowsWarn is like ProjectRows but colors every cell of a row whose
+// cell at warnCol equals "Warning" (case-insensitive). warnCol < 0 disables
+// it. Coloring is applied to the cell strings so the table renders it for
+// non-selected rows.
+func ProjectRowsWarn(rows []k8s.Row, idx []int, warnCol int) []table.Row {
+	out := make([]table.Row, len(rows))
+	for r, row := range rows {
+		warn := warnCol >= 0 && warnCol < len(row.Cells) && strings.EqualFold(row.Cells[warnCol], "Warning")
+		cells := make(table.Row, len(idx))
+		for k, i := range idx {
+			val := ""
+			if i < len(row.Cells) {
+				val = row.Cells[i]
+			}
+			if warn {
+				val = warnRowStyle.Render(val)
+			}
+			cells[k] = val
+		}
+		out[r] = cells
+	}
+	return out
 }

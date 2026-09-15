@@ -37,6 +37,7 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | `x` | Shell into the selected pod inside the TUI (bash if present, else sh); picks a container when there are several. Keys go to the shell; `ctrl+]` or the shell's own `exit` closes it and returns to the table |
 | `F` | Port-forward the selected pod to a local port; picks or prompts for the remote port. The palette's `port-forwards` panel lists active tunnels and cancels them with `ctrl+d` (after a confirm) |
 | `l` | Logs of the selected pod, all containers merged by time, following |
+| `E` | Events for the selected object, filtered by involved object; warnings highlighted |
 | In logs: `c` container, `s` since window, `t` timestamps, `w` wrap, `f` follow, `/` regex filter, `S` save to file |
 | `y` | YAML of the selected object, managed fields stripped |
 | `e` | Edit the selected object in `$EDITOR` (`$KUBE_EDITOR` wins); save to apply, no change aborts |
@@ -57,7 +58,7 @@ confirmation first: `y` runs it, `n` or `esc` cancels.
 
 Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
 `ns all` returns to all namespaces, `ctx prod` narrows to contexts. The
-palette also has `quit` (also `exit` or `:q`) and `help` actions, and lists
+palette also has `quit` (also `exit` or `:q`) and `help` actions, an `events` cluster stream, and lists
 the actions available for the selected row at the top. Choosing a resource pushes a new view;
 choosing a namespace keeps the current resource and resets the view stack;
 choosing a context reconnects.

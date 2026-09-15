@@ -665,6 +665,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 				return execContainersMsg{tgt: tgt, names: k8s.Containers(obj)}
 			}
+		case is(msg, keys.Events):
+			row, ok := rv.selectedRow()
+			if !ok {
+				return m, nil
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			rv.stop()
+			m.pushEvents(rv.res, ns, row)
+			return m, m.startTop()
 		case is(msg, keys.Logs):
 			row, ok := rv.selectedRow()
 			if !ok {
@@ -914,6 +926,8 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 			m.showHelp = true
 		case actionForwards:
 			m.openForwards()
+		case actionEvents:
+			return m.openClusterEvents()
 		default:
 			if name, ok := strings.CutPrefix(it.Name, "act:"); ok {
 				if a, found := actionByName(name); found {
