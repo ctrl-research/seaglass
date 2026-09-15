@@ -1853,9 +1853,25 @@ func TestForwardsPanelCancel(t *testing.T) {
 		t.Errorf("panel should list the forward:\n%s", out)
 	}
 	_ = fv
+	// ctrl+d now asks for confirmation before cancelling.
 	m, _ = press(m, "ctrl+d")
+	if m.confirm == nil {
+		t.Fatal("ctrl+d should ask before cancelling a forward")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "cancel port-forward?") {
+		t.Errorf("confirm text:\n%s", stripANSI(m.View().Content))
+	}
+	// n aborts, the forward stays.
+	m, _ = press(m, "n")
+	if m.forwards.count() != 1 {
+		t.Fatal("n should keep the forward")
+	}
+	// y cancels it.
+	m, _ = press(m, "ctrl+d")
+	m, cmd = press(m, "y")
+	m = runResult(m, cmd)
 	if m.forwards.count() != 0 {
-		t.Error("ctrl+d should cancel the selected forward")
+		t.Error("y should cancel the selected forward")
 	}
 	if !strings.Contains(stripANSI(m.View().Content), "stopped forward") {
 		t.Error("cancel notice missing")
