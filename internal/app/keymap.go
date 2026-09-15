@@ -21,6 +21,7 @@ type keyMap struct {
 	Columns key.Binding
 	Detail  key.Binding
 	YAML    key.Binding
+	Edit    key.Binding
 
 	// Object view
 	ModeYAML   key.Binding
@@ -67,6 +68,7 @@ var keys = keyMap{
 	Columns: bind("w", "cycle columns auto/wide/narrow", "w"),
 	Detail:  bind("enter", "detail", "enter", "d"),
 	YAML:    bind("y", "yaml", "y"),
+	Edit:    bind("e", "edit in $EDITOR", "e"),
 
 	ModeYAML:   bind("y", "show yaml", "y"),
 	ModeDetail: bind("d", "show detail", "d"),

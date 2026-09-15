@@ -44,6 +44,7 @@ type Options struct {
 	patcher  patcher
 	logger   logger
 	execer   execer
+	editer   editor
 	// contexts overrides kubeconfig context discovery for tests.
 	contexts []string
 }
@@ -117,7 +118,7 @@ type (
 func New(opts Options) Model {
 	m := Model{
 		client:    opts.Client,
-		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger, exec: opts.execer},
+		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger, exec: opts.execer, edit: opts.editer},
 		saveDir:   opts.SaveDir,
 		namespace: opts.Namespace,
 		palette:   newPalette(),
@@ -140,6 +141,9 @@ func New(opts Options) Model {
 	}
 	if m.deps.exec == nil && opts.Client != nil {
 		m.deps.exec = opts.Client
+	}
+	if m.deps.edit == nil && opts.Client != nil {
+		m.deps.edit = opts.Client
 	}
 	if m.saveDir == "" {
 		m.saveDir = "."
@@ -380,6 +384,26 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case editPrepMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		ready := msg
+		return m, tea.ExecProcess(editorCommand(msg.path), func(err error) tea.Msg {
+			return editorDoneMsg{tgt: ready.tgt, path: ready.path, original: ready.original, err: err}
+		})
+
+	case editorDoneMsg:
+		return m, applyEdit(m.deps.edit, msg)
+
+	case editResultMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		return m, m.setNotice(msg.summary)
+
 	case logLinesMsg:
 		if lv, ok := m.top().(*logsView); ok && lv.id == msg.id {
 			return m, lv.handleLines(msg)
@@ -573,6 +597,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			cmd := m.palette.showWith(sortItems(rv.snapshot.Columns, rv.sortCol), "sort by column")
 			rv.resize(m.width, m.bodyHeight())
 			return m, cmd
+		case is(msg, keys.Edit):
+			row, ok := rv.selectedRow()
+			if !ok {
+				return m, nil
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			return m, prepareEdit(m.deps.edit, m.saveDir, target{res: rv.res, namespace: ns, name: row.Name})
 		case is(msg, keys.Detail), is(msg, keys.YAML):
 			row, ok := rv.selectedRow()
 			if !ok {
@@ -591,8 +625,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.startTop()
 		}
 	}
-	if ov, ok := top.(*objectView); ok && is(msg, keys.Reload) {
-		return m, ov.start(m.deps)
+	if ov, ok := top.(*objectView); ok {
+		switch {
+		case is(msg, keys.Reload):
+			return m, ov.start(m.deps)
+		case is(msg, keys.Edit):
+			return m, prepareEdit(m.deps.edit, m.saveDir, target{res: ov.res, namespace: ov.namespace, name: ov.name})
+		}
 	}
 	if lv, ok := top.(*logsView); ok {
 		switch {
@@ -802,7 +841,7 @@ func (m *Model) useClient(c *k8s.Client) tea.Cmd {
 		v.stop()
 	}
 	m.client = c
-	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c, logs: c, exec: c}
+	m.deps = deps{stream: clientStreamer{c}, get: c, patch: c, logs: c, exec: c, edit: c}
 	m.namespace = c.Namespace
 	m.resources, m.namespaces = nil, nil
 	m.serverVersion = ""
