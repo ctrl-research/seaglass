@@ -38,6 +38,7 @@ type keyMap struct {
 	ShellClose key.Binding
 
 	// Logs
+	Events        key.Binding
 	Logs          key.Binding
 	LogContainer  key.Binding
 	LogSince      key.Binding
@@ -86,6 +87,7 @@ var keys = keyMap{
 	Bottom:     bind("G", "bottom", "G"),
 
 	Shell:         bind("x", "shell into container", "x"),
+	Events:        bind("E", "events for this object", "E"),
 	ShellClose:    bind("ctrl+]", "close the shell", "ctrl+]"),
 	Logs:          bind("l", "logs", "l"),
 	Forwards:      bind("F", "port-forward this pod", "F"),

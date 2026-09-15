@@ -60,6 +60,7 @@ const (
 	actionQuit     = "quit"
 	actionHelp     = "help"
 	actionForwards = "forwards"
+	actionEvents   = "events"
 )
 
 // paletteItem is one selectable entry.
@@ -131,6 +132,7 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 		items = append(items, paletteItem{Kind: itemContext, Label: c, Detail: "context", Name: c, search: strings.ToLower("ctx context " + c)})
 	}
 	items = append(items,
+		paletteItem{Kind: itemAction, Label: "events", Detail: "cluster events, newest first, warnings highlighted", Name: actionEvents, search: "events warnings ev"},
 		paletteItem{Kind: itemAction, Label: "port-forwards", Detail: "list and cancel active port-forwards", Name: actionForwards, search: "port forwards proxy tunnel"},
 		paletteItem{Kind: itemAction, Label: "help", Detail: "show every key for this view", Name: actionHelp, search: "help keys ?"},
 		paletteItem{Kind: itemAction, Label: "quit", Detail: "exit seaglass", Name: actionQuit, search: "quit exit q :q"},
