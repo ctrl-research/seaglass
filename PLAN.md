@@ -168,7 +168,11 @@ edit need bespoke code. This avoids writing the actions twice.
   object view: fetch, strip status/managedFields, open the editor, apply
   on save via update; a stale resourceVersion is reported as a conflict,
   schema/immutable errors as invalid, no change aborts.
-- [ ] Port-forward with an active-forwards panel and cancel.
+- [x] Port-forward (`F`) a pod to a local port (auto-assigned): single
+  declared port forwards directly, several open a picker, none prompt for
+  one. A palette `port-forwards` panel lists active tunnels and cancels
+  them; a status-bar `⇄N` indicator; forwards that die on their own are
+  removed with an error. Torn down on context switch and quit.
 - [ ] Copy resource name / namespace / kubectl command to clipboard.
 - [ ] Rollout status inline.
 

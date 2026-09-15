@@ -35,6 +35,7 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | `w` | Cycle columns: auto (fit to width), wide (all), narrow (essentials) |
 | `enter` or `d` | Detail view of the selected object: metadata, status, conditions, containers |
 | `x` | Shell into the selected pod inside the TUI (bash if present, else sh); picks a container when there are several. Keys go to the shell; `ctrl+]` or the shell's own `exit` closes it and returns to the table |
+| `F` | Port-forward the selected pod to a local port; picks or prompts for the remote port. The palette's `port-forwards` panel lists active tunnels and cancels them with `ctrl+d` (after a confirm) |
 | `l` | Logs of the selected pod, all containers merged by time, following |
 | In logs: `c` container, `s` since window, `t` timestamps, `w` wrap, `f` follow, `/` regex filter, `S` save to file |
 | `y` | YAML of the selected object, managed fields stripped |

@@ -44,6 +44,10 @@ type keyMap struct {
 	LogFollow     key.Binding
 	LogSave       key.Binding
 
+	// Port-forwards
+	Forwards key.Binding
+	Delete   key.Binding
+
 	// Palette and filter input
 	Accept   key.Binding
 	Up       key.Binding
@@ -80,6 +84,8 @@ var keys = keyMap{
 	Shell:         bind("x", "shell into container", "x"),
 	ShellClose:    bind("ctrl+]", "close the shell", "ctrl+]"),
 	Logs:          bind("l", "logs", "l"),
+	Forwards:      bind("F", "port-forward this pod", "F"),
+	Delete:        bind("ctrl+d", "cancel", "ctrl+d"),
 	LogContainer:  bind("c", "choose container", "c"),
 	LogSince:      bind("s", "since (time window)", "s"),
 	LogTimestamps: bind("t", "toggle timestamps", "t"),

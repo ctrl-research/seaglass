@@ -179,6 +179,25 @@ func (f *fakeEditor) Update(_ context.Context, res k8s.Resource, ns, name string
 	return &unstructured.Unstructured{}, nil
 }
 
+// fakeForwarder returns a canned PortForward or an error.
+type fakeForwarder struct {
+	calls []string // "ns/pod:remote"
+	err   error
+	local uint16
+}
+
+func (f *fakeForwarder) ForwardPort(ns, pod string, local, remote uint16) (*k8s.PortForward, error) {
+	f.calls = append(f.calls, fmt.Sprintf("%s/%s:%d", ns, pod, remote))
+	if f.err != nil {
+		return nil, f.err
+	}
+	lp := f.local
+	if lp == 0 {
+		lp = 30000 + remote
+	}
+	return k8s.NewTestForward(ns, pod, lp, remote), nil
+}
+
 // rv asserts the top view is a table view.
 func rv(m Model) *resourceView { return m.top().(*resourceView) }
 
@@ -208,6 +227,7 @@ func newTestFull(t *testing.T) (Model, *fakeStreamer, *fakeGetter) {
 		logger:    &fakeLogger{},
 		execer:    &fakeExecer{},
 		editer:    &fakeEditor{},
+		forwarder: &fakeForwarder{},
 		contexts:  []string{"test-ctx", "other-ctx"},
 	})
 	// Init returns a batch; run the stream start directly instead so tests
@@ -1726,3 +1746,166 @@ func TestEditFromObjectView(t *testing.T) {
 
 func osStat(p string) (os.FileInfo, error) { return os.Stat(p) }
 func osWrite(p, content string) error      { return os.WriteFile(p, []byte(content), 0o600) }
+
+func ff(m Model) *fakeForwarder { return m.deps.fwd.(*fakeForwarder) }
+
+// podPortsObj sets the fake getter's pod to expose the given ports.
+func setPodPorts(m Model, ports ...int) {
+	fg := m.deps.get.(*fakeGetter)
+	var ps []any
+	for _, p := range ports {
+		ps = append(ps, map[string]any{"containerPort": int64(p)})
+	}
+	fg.obj.Object["spec"] = map[string]any{"containers": []any{map[string]any{"name": "app", "ports": ps}}}
+}
+
+func TestForwardSinglePortStartsDirectly(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	setPodPorts(m, 8080)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "F")
+	if cmd == nil {
+		t.Fatal("F should fetch pod ports")
+	}
+	mm, cmd := m.Update(cmd()) // fwdContainersMsg -> startForward cmd
+	m = mm.(Model)
+	if m.palette.open || m.prompt.open {
+		t.Fatal("a single port should forward directly")
+	}
+	mm, _ = m.Update(cmd()) // forwardStartedMsg
+	m = mm.(Model)
+	if ff(m).calls[0] != "default/a:8080" {
+		t.Errorf("forward call = %v", ff(m).calls)
+	}
+	if m.forwards.count() != 1 {
+		t.Fatalf("expected one active forward, got %d", m.forwards.count())
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "forwarding 127.0.0.1:38080 → default/a:8080") {
+		t.Errorf("notice missing:\n%s", stripANSI(m.View().Content))
+	}
+	// Once the transient notice clears, the persistent ⇄ indicator shows.
+	mm, _ = m.Update(clearNoticeMsg{seq: m.noticeSeq})
+	m = mm.(Model)
+	if !strings.Contains(stripANSI(m.View().Content), "⇄1") {
+		t.Errorf("status should show the forward indicator:\n%s", stripANSI(m.View().Content))
+	}
+}
+
+func TestForwardMultiPortPicker(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	setPodPorts(m, 8080, 9090)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "F")
+	mm, _ := m.Update(cmd())
+	m = mm.(Model)
+	if !m.palette.open || m.fwdTarget == nil {
+		t.Fatal("multiple ports should open a picker")
+	}
+	m = typeStr(m, "9090")
+	m, cmd = press(m, "enter")
+	mm, _ = m.Update(cmd())
+	m = mm.(Model)
+	if ff(m).calls[0] != "default/a:9090" {
+		t.Errorf("forward call = %v", ff(m).calls)
+	}
+}
+
+func TestForwardNoPortsPrompts(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	setPodPorts(m) // none
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "F")
+	mm, _ := m.Update(cmd())
+	m = mm.(Model)
+	if !m.prompt.open || m.fwdTarget == nil {
+		t.Fatal("a pod with no declared ports should prompt for one")
+	}
+	m = typeStr(m, "5432")
+	m, cmd = press(m, "enter")
+	if cmd == nil {
+		t.Fatal("submitting the port should start a forward")
+	}
+	execCmdInto(&m, cmd)
+	if len(ff(m).calls) != 1 || ff(m).calls[0] != "default/a:5432" {
+		t.Errorf("forward call = %v", ff(m).calls)
+	}
+}
+
+func TestForwardsPanelCancel(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	setPodPorts(m, 8080)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "F")
+	mm, cmd := m.Update(cmd())
+	m = mm.(Model)
+	mm, _ = m.Update(cmd()) // started
+	m = mm.(Model)
+	// Open the forwards panel via the palette.
+	m, _ = press(m, ":")
+	m = typeStr(m, "forwards")
+	m, _ = press(m, "enter")
+	fv, ok := m.top().(*forwardsView)
+	if !ok {
+		t.Fatalf("palette should open the forwards panel, got %T", m.top())
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "127.0.0.1:38080 → default/a:8080") {
+		t.Errorf("panel should list the forward:\n%s", out)
+	}
+	_ = fv
+	// ctrl+d now asks for confirmation before cancelling.
+	m, _ = press(m, "ctrl+d")
+	if m.confirm == nil {
+		t.Fatal("ctrl+d should ask before cancelling a forward")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "cancel port-forward?") {
+		t.Errorf("confirm text:\n%s", stripANSI(m.View().Content))
+	}
+	// n aborts, the forward stays.
+	m, _ = press(m, "n")
+	if m.forwards.count() != 1 {
+		t.Fatal("n should keep the forward")
+	}
+	// y cancels it.
+	m, _ = press(m, "ctrl+d")
+	m, cmd = press(m, "y")
+	m = runResult(m, cmd)
+	if m.forwards.count() != 0 {
+		t.Error("y should cancel the selected forward")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "stopped forward") {
+		t.Error("cancel notice missing")
+	}
+	m, _ = press(m, "esc")
+	if _, ok := m.top().(*resourceView); !ok {
+		t.Error("esc should leave the panel")
+	}
+}
+
+func TestForwardDeathRemovesIt(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	setPodPorts(m, 8080)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "F")
+	mm, cmd := m.Update(cmd())
+	m = mm.(Model)
+	mm, _ = m.Update(cmd())
+	m = mm.(Model)
+	id := m.forwards.list[0].id
+	mm, _ = m.Update(forwardDiedMsg{id: id, err: errors.New("pod deleted")})
+	m = mm.(Model)
+	if m.forwards.count() != 0 {
+		t.Error("a died forward should be removed")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "stopped") {
+		t.Logf("view: %s", stripANSI(m.View().Content))
+	}
+}
+
+func TestForwardOnNonPodIsANotice(t *testing.T) {
+	m := onDeployments(t)
+	m, _ = press(m, "F")
+	if !strings.Contains(stripANSI(m.View().Content), "port-forward opens from a pod") {
+		t.Error("F on a deployment should notify")
+	}
+}
