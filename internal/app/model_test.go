@@ -1117,6 +1117,14 @@ func deploySnap() k8s.Snapshot {
 	}
 }
 
+func onDeploymentsFull(t *testing.T, m Model) Model {
+	t.Helper()
+	m, _ = press(m, ":")
+	m = typeStr(m, "deploy")
+	m, _ = press(m, "enter")
+	return feed(m, k8s.Update{Snapshot: deploySnap(), Status: k8s.StatusLive})
+}
+
 func onDeployments(t *testing.T) Model {
 	t.Helper()
 	m, _ := newTest(t)
@@ -1960,5 +1968,119 @@ func TestCopyNameOnly(t *testing.T) {
 	}
 	if items[0].Text != "web-1" {
 		t.Errorf("first copy item should be the name, got %q", items[0].Text)
+	}
+}
+
+// drainRollout drives a rollout view to completion: it expands the start
+// batch, runs poll commands, feeds their status messages back, and
+// simulates each scheduled tick by polling again.
+func drainRollout(t *testing.T, m *Model, cmd tea.Cmd) {
+	t.Helper()
+	// Collect leaf commands from a (possibly batched) command.
+	var leaves func(tea.Cmd) []tea.Cmd
+	leaves = func(c tea.Cmd) []tea.Cmd {
+		if c == nil {
+			return nil
+		}
+		msg := c()
+		if b, ok := msg.(tea.BatchMsg); ok {
+			var out []tea.Cmd
+			for _, cc := range b {
+				out = append(out, leaves(cc)...)
+			}
+			return out
+		}
+		// Feed non-command messages into the model.
+		mm, next := m.Update(msg)
+		*m = mm.(Model)
+		return leaves(next)
+	}
+	for i := 0; i < 30; i++ {
+		rv, ok := m.top().(*rolloutView)
+		if !ok || rv.done {
+			return
+		}
+		leaves(rv.poll())
+	}
+}
+
+func TestRolloutStatusView(t *testing.T) {
+	m, _, fg := newTestFull(t)
+	// Serve a completed deployment.
+	fg.obj = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "web", "namespace": "default", "generation": int64(2)},
+		"spec":     map[string]any{"replicas": int64(3)},
+		"status":   map[string]any{"observedGeneration": int64(2), "updatedReplicas": int64(3), "replicas": int64(3), "availableReplicas": int64(3)},
+	}}
+	m = onDeploymentsFull(t, m)
+	m, cmd := press(m, "R")
+	if cmd == nil {
+		t.Fatal("R should open the rollout view")
+	}
+	rv, ok := m.top().(*rolloutView)
+	if !ok {
+		t.Fatalf("top = %T", m.top())
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "test-ctx › default › deployments › web › rollout") {
+		t.Errorf("crumbs:\n%s", out)
+	}
+	// Drive the poll: it should complete.
+	drainRollout(t, &m, cmd)
+	if !m.top().(*rolloutView).done {
+		t.Fatal("rollout should complete")
+	}
+	out = stripANSI(m.View().Content)
+	if !strings.Contains(out, "successfully rolled out") || !strings.Contains(out, "rollout complete") {
+		t.Errorf("completion missing:\n%s", out)
+	}
+	if !strings.Contains(out, "complete") {
+		t.Error("status should say complete")
+	}
+	_ = rv
+	// esc returns to the deployments table.
+	m, _ = press(m, "esc")
+	if _, ok := m.top().(*resourceView); !ok {
+		t.Error("esc should return to the table")
+	}
+}
+
+func TestRestartFollowsRollout(t *testing.T) {
+	m, _, fg := newTestFull(t)
+	fg.obj = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "web", "namespace": "default", "generation": int64(1)},
+		"spec":     map[string]any{"replicas": int64(1)},
+		"status":   map[string]any{"observedGeneration": int64(1), "updatedReplicas": int64(1), "replicas": int64(1), "availableReplicas": int64(1)},
+	}}
+	m = onDeploymentsFull(t, m)
+	m, _ = press(m, "r") // restart -> confirm
+	if m.confirm == nil {
+		t.Fatal("restart should confirm")
+	}
+	m, cmd := press(m, "y")
+	// runAction returns actionResultMsg with follow=true.
+	msg := cmd().(actionResultMsg)
+	if !msg.follow {
+		t.Fatal("restart result should request follow")
+	}
+	mm, cmd := m.Update(msg)
+	m = mm.(Model)
+	if _, ok := m.top().(*rolloutView); !ok {
+		t.Fatalf("restart should open a rollout view, got %T", m.top())
+	}
+	drainRollout(t, &m, cmd)
+	if !strings.Contains(stripANSI(m.View().Content), "rolled out") {
+		t.Errorf("rollout not followed:\n%s", stripANSI(m.View().Content))
+	}
+}
+
+func TestPodsNotRolloutable(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "R")
+	if cmd != nil || len(m.stack) != 1 {
+		t.Error("R on pods should do nothing")
 	}
 }

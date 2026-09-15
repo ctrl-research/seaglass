@@ -19,6 +19,7 @@ type keyMap struct {
 	Sort    key.Binding
 	Reverse key.Binding
 	Columns key.Binding
+	Rollout key.Binding
 	Detail  key.Binding
 	YAML    key.Binding
 	Edit    key.Binding
@@ -70,6 +71,7 @@ var keys = keyMap{
 	Filter:  bind("/", "filter rows", "/"),
 	Sort:    bind("s", "sort by column", "s"),
 	Reverse: bind("S", "reverse sort", "S"),
+	Rollout: bind("R", "rollout status", "R"),
 	Columns: bind("w", "cycle columns auto/wide/narrow", "w"),
 	Detail:  bind("enter", "detail", "enter", "d"),
 	YAML:    bind("y", "yaml", "y"),

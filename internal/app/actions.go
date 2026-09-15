@@ -32,6 +32,9 @@ type action struct {
 	// Force offers a force toggle in the confirm dialog. For deletes it
 	// means grace period 0.
 	Force bool
+	// Follow opens a rollout-status view after the action succeeds, for
+	// actions that trigger a rollout.
+	Follow bool
 	// Input, when set, prompts the user for a value before running.
 	Input *inputSpec
 	// Match decides whether the action applies to a resource type.
@@ -75,6 +78,9 @@ func (t target) String() string {
 type actionResultMsg struct {
 	summary string
 	err     error
+	// follow and tgt ask the model to open a rollout view on success.
+	follow bool
+	tgt    target
 }
 
 // pendingAction is an action awaiting confirmation or input.
@@ -115,6 +121,7 @@ var builtinActions = []action{
 		Desc:    "rollout restart",
 		Key:     bind("r", "rollout restart", "r"),
 		Confirm: true,
+		Follow:  true,
 		Match:   matchKinds("apps/deployments", "apps/statefulsets", "apps/daemonsets"),
 		Fields: func(a actionArgs) ([]k8s.Field, error) {
 			return []k8s.Field{{
@@ -267,7 +274,7 @@ func runAction(p patcher, pa pendingAction) tea.Cmd {
 		if a.Input != nil {
 			summary = a.Name + " " + tgt.String() + " to " + strings.TrimSpace(args.input) + " " + a.Input.Label
 		}
-		return actionResultMsg{summary: summary}
+		return actionResultMsg{summary: summary, follow: a.Follow, tgt: tgt}
 	}
 }
 

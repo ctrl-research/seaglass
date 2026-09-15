@@ -45,6 +45,7 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | `esc` | Clear the filter, close the palette, or go back one view |
 | `j`/`k`, arrows, `pgup`/`pgdn`, `g`/`G` | Move in the table |
 | `r` | Rollout restart the selected Deployment, StatefulSet, or DaemonSet, after a confirm |
+| `R` | Follow the rollout status of the selected Deployment, StatefulSet, or DaemonSet until it completes; a restart opens this automatically |
 | `=` | Scale the selected Deployment, StatefulSet, or ReplicaSet: prompts for replicas, prefilled from the table |
 | `+` / `-` | Scale by one replica up or down |
 | `ctrl+d` | Delete the selected object; `f` in the dialog toggles force (grace period 0) |
