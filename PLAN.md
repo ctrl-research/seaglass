@@ -194,8 +194,10 @@ reuse them.
   controller ownerReference to the owner's detail, resolving its kind
   via discovery; repeatable to walk up (Pod → ReplicaSet → Deployment).
   Built as a generic jump the related jumps and M4 config will reuse.
-- Related jump (`shift+r`): Service → Endpoints → Pods, Deployment → Pods
-  by selector, Pod → Node, Node → Pods, ConfigMap/Secret → mounting Pods.
+- [x] Related jump (`J`): Deployment/StatefulSet/DaemonSet/Service → pods
+  by label selector, Pod → Node, Node → pods by spec.nodeName; a picker
+  when several apply, direct when one. Threaded a label selector through
+  the stream. ConfigMap/Secret → mounting pods to follow (client-side).
 - [x] Events view per resource (`E`, involvedObject-filtered) and a
   cluster-wide events stream (palette `events`), warning rows highlighted.
   Threaded a field selector through the Table stream to reuse it.

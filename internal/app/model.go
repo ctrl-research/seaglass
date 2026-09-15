@@ -67,16 +67,17 @@ type Model struct {
 	namespaces []string
 	contexts   []string
 
-	connecting string // context name while switching, "" otherwise
-	err        error
-	showHelp   bool
-	confirm    *confirmDialog
-	prompt     prompt
-	execTarget *target // pod awaiting a container choice for a shell
-	fwdTarget  *target // pod awaiting a port choice for a forward
-	forwards   forwards
-	notice     string
-	noticeSeq  int
+	connecting     string // context name while switching, "" otherwise
+	err            error
+	showHelp       bool
+	confirm        *confirmDialog
+	prompt         prompt
+	execTarget     *target         // pod awaiting a container choice for a shell
+	fwdTarget      *target         // pod awaiting a port choice for a forward
+	relatedTargets []relatedTarget // targets awaiting a related-jump choice
+	forwards       forwards
+	notice         string
+	noticeSeq      int
 
 	version       string // seaglass version
 	serverVersion string // fetched from /version
@@ -395,6 +396,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ownerJumpMsg:
 		return m.handleOwnerJump(msg)
 
+	case relatedMsg:
+		return m.handleRelated(msg)
+
 	case rolloutStatusMsg:
 		if rv, ok := m.top().(*rolloutView); ok && rv.id == msg.id {
 			return m, rv.handleStatus(msg)
@@ -579,6 +583,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if chosen == nil {
 				m.execTarget = nil
 				m.fwdTarget = nil
+				m.relatedTargets = nil
 			}
 		}
 		if chosen != nil {
@@ -733,6 +738,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				ns = rv.namespace
 			}
 			return m, m.jumpToOwner(rv.res, ns, row.Name, nil)
+		case is(msg, keys.Related):
+			row, ok := rv.selectedRow()
+			if !ok {
+				return m, nil
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			return m, m.computeRelated(rv.res, ns, row.Name, nil)
 		case is(msg, keys.CopyRef):
 			row, ok := rv.selectedRow()
 			if !ok {
@@ -775,6 +790,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, prepareEdit(m.deps.edit, m.saveDir, target{res: ov.res, namespace: ov.namespace, name: ov.name})
 		case is(msg, keys.Owner):
 			return m, m.jumpToOwner(ov.res, ov.namespace, ov.name, ov.obj)
+		case is(msg, keys.Related):
+			return m, m.computeRelated(ov.res, ov.namespace, ov.name, ov.obj)
 		}
 	}
 	if fv, ok := top.(*forwardsView); ok {
@@ -925,6 +942,13 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 		return startForward(m.deps.fwd, tgt.res, tgt.namespace, tgt.name, 0, uint16(it.Index))
 	case itemCopy:
 		return tea.Batch(tea.SetClipboard(it.Text), m.setNotice("copied: "+it.Text))
+	case itemRelated:
+		if it.Index < 0 || it.Index >= len(m.relatedTargets) {
+			return nil
+		}
+		t := m.relatedTargets[it.Index]
+		m.relatedTargets = nil
+		return m.navigateRelated(t)
 	case itemSince:
 		if lv, ok := m.top().(*logsView); ok {
 			return lv.setSince(it.Since)
