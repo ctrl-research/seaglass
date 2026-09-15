@@ -173,7 +173,9 @@ edit need bespoke code. This avoids writing the actions twice.
   one. A palette `port-forwards` panel lists active tunnels and cancels
   them; a status-bar `⇄N` indicator; forwards that die on their own are
   removed with an error. Torn down on context switch and quit.
-- [ ] Copy resource name / namespace / kubectl command to clipboard.
+- [x] Copy (`c`) the selected object's name, namespace, `namespace/name`,
+  or a context- and namespace-scoped `kubectl get/describe/-o yaml`
+  command to the clipboard via OSC52, chosen from a picker.
 - [ ] Rollout status inline.
 
 Gate: k9s is uninstalled.

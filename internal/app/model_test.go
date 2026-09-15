@@ -1909,3 +1909,56 @@ func TestForwardOnNonPodIsANotice(t *testing.T) {
 		t.Error("F on a deployment should notify")
 	}
 }
+
+func TestCopyPicker(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "c")
+	if !m.palette.open {
+		t.Fatal("c should open the copy picker")
+	}
+	// Default namespace is "default"; the picker offers name, namespace, etc.
+	labels := map[string]bool{}
+	for _, it := range m.palette.items {
+		labels[it.Label] = true
+	}
+	for _, want := range []string{"name", "namespace", "namespace/name", "kubectl get", "kubectl describe"} {
+		if !labels[want] {
+			t.Errorf("copy picker missing %q", want)
+		}
+	}
+	// Choosing "kubectl get" copies a context-scoped command.
+	m = typeStr(m, "kubectl get")
+	it, ok := m.palette.selected()
+	if !ok || it.Kind != itemCopy {
+		t.Fatalf("selected %+v", it)
+	}
+	m, cmd := press(m, "enter")
+	if cmd == nil {
+		t.Fatal("enter should copy (SetClipboard + notice)")
+	}
+	want := "kubectl --context test-ctx -n default get pods/a"
+	if it.Text != want {
+		t.Errorf("copy text = %q, want %q", it.Text, want)
+	}
+	// The status bar truncates; check the full notice on the model.
+	if m.notice != "copied: "+want {
+		t.Errorf("notice = %q", m.notice)
+	}
+}
+
+func TestCopyNameOnly(t *testing.T) {
+	items := copyItems(k8s.Pods, "", "web-1", "")
+	// Cluster-scoped (no namespace) copy: no namespace entry, no -n flag.
+	for _, it := range items {
+		if it.Label == "namespace" {
+			t.Error("no namespace entry when namespace is empty")
+		}
+		if it.Kind == itemCopy && it.Label == "kubectl get" && strings.Contains(it.Text, " -n ") {
+			t.Errorf("cluster-scoped command should have no -n: %q", it.Text)
+		}
+	}
+	if items[0].Text != "web-1" {
+		t.Errorf("first copy item should be the name, got %q", items[0].Text)
+	}
+}
