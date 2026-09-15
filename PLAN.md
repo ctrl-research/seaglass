@@ -164,8 +164,10 @@ edit need bespoke code. This avoids writing the actions twice.
   Resize forwarding, bash-or-sh, container picker, `ctrl+]` closes.
   A clean exit (shell exit or `ctrl+]`) returns to the table automatically
   with a notice; a real error (no shell in image) stays until esc.
-- [ ] Edit in `$EDITOR` (`e`) with server-side apply and a diff-on-conflict
-  message.
+- [x] Edit in `$EDITOR` (`e`, honoring `$KUBE_EDITOR`) from the table or
+  object view: fetch, strip status/managedFields, open the editor, apply
+  on save via update; a stale resourceVersion is reported as a conflict,
+  schema/immutable errors as invalid, no change aborts.
 - [ ] Port-forward with an active-forwards panel and cancel.
 - [ ] Copy resource name / namespace / kubectl command to clipboard.
 - [ ] Rollout status inline.

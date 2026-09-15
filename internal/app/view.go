@@ -33,6 +33,7 @@ type deps struct {
 	patch  patcher
 	logs   logger
 	exec   execer
+	edit   editor
 }
 
 // viewStatus is what a view contributes to the status bar.

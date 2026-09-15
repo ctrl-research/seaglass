@@ -153,6 +153,32 @@ func (f *fakeExecer) RunCommand(context.Context, string, string, string, []strin
 	return f.user, nil
 }
 
+// fakeEditor serves an object to edit and records updates.
+type fakeEditor struct {
+	obj     *unstructured.Unstructured
+	updates []string // "res/ns/name: <yaml>"
+	err     error
+}
+
+func (f *fakeEditor) Get(_ context.Context, res k8s.Resource, ns, name string) (*unstructured.Unstructured, error) {
+	if f.obj != nil {
+		return f.obj, nil
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]any{"name": name, "namespace": ns, "resourceVersion": "42"},
+		"spec":     map[string]any{"containers": []any{map[string]any{"name": "c", "image": "nginx:1.0"}}},
+	}}, nil
+}
+
+func (f *fakeEditor) Update(_ context.Context, res k8s.Resource, ns, name string, y []byte) (*unstructured.Unstructured, error) {
+	f.updates = append(f.updates, res.Name()+"/"+ns+"/"+name+": "+string(y))
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &unstructured.Unstructured{}, nil
+}
+
 // rv asserts the top view is a table view.
 func rv(m Model) *resourceView { return m.top().(*resourceView) }
 
@@ -181,6 +207,7 @@ func newTestFull(t *testing.T) (Model, *fakeStreamer, *fakeGetter) {
 		patcher:   &fakePatcher{},
 		logger:    &fakeLogger{},
 		execer:    &fakeExecer{},
+		editer:    &fakeEditor{},
 		contexts:  []string{"test-ctx", "other-ctx"},
 	})
 	// Init returns a batch; run the stream start directly instead so tests
@@ -1583,3 +1610,119 @@ func TestShellErrorShown(t *testing.T) {
 		t.Error("esc after an error should return to the table")
 	}
 }
+
+func fed(m Model) *fakeEditor { return m.deps.edit.(*fakeEditor) }
+
+// prep runs prepareEdit for the selected row and returns the temp path and
+// original content the editor would see.
+func prep(t *testing.T, m Model) (Model, editPrepMsg) {
+	t.Helper()
+	m, cmd := press(m, "e")
+	if cmd == nil {
+		t.Fatal("e should prepare an edit")
+	}
+	msg, ok := cmd().(editPrepMsg)
+	if !ok {
+		t.Fatalf("expected editPrepMsg, got %T", cmd())
+	}
+	return m, msg
+}
+
+func TestEditNoChangeAborts(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, prepMsg := prep(t, m)
+	if prepMsg.err != nil {
+		t.Fatal(prepMsg.err)
+	}
+	// The banner explains what is being edited and the body is the object.
+	if !strings.Contains(prepMsg.original, "# Editing Pod default/a.") || !strings.Contains(prepMsg.original, "image: nginx:1.0") {
+		t.Errorf("edit buffer:\n%s", prepMsg.original)
+	}
+	if strings.Contains(prepMsg.original, "status:") || strings.Contains(prepMsg.original, "managedFields") {
+		t.Error("status and managedFields should be stripped for editing")
+	}
+	// Editor exits with the file unchanged -> abort, no update.
+	res := applyEdit(fed(m), editorDoneMsg{tgt: target{res: k8s.Pods, namespace: "default", name: "a"}, path: prepMsg.path, original: prepMsg.original})().(editResultMsg)
+	if res.err != nil || res.summary != "edit aborted, no change" {
+		t.Errorf("unchanged edit = %+v", res)
+	}
+	if len(fed(m).updates) != 0 {
+		t.Error("no update should be sent for an unchanged edit")
+	}
+	if _, err := osStat(prepMsg.path); err == nil {
+		t.Error("temp file should be removed")
+	}
+}
+
+func TestEditAppliesChange(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, prepMsg := prep(t, m)
+	// Simulate the user changing the image, then the editor exiting.
+	edited := strings.Replace(prepMsg.original, "nginx:1.0", "nginx:2.0", 1)
+	if err := osWrite(prepMsg.path, edited); err != nil {
+		t.Fatal(err)
+	}
+	done := editorDoneMsg{tgt: target{res: k8s.Pods, namespace: "default", name: "a"}, path: prepMsg.path, original: prepMsg.original}
+	res := applyEdit(fed(m), done)().(editResultMsg)
+	if res.err != nil {
+		t.Fatalf("apply failed: %v", res.err)
+	}
+	if len(fed(m).updates) != 1 || !strings.Contains(fed(m).updates[0], "nginx:2.0") {
+		t.Errorf("updates = %v", fed(m).updates)
+	}
+	if strings.Contains(fed(m).updates[0], "# Editing") {
+		t.Error("banner should be stripped before applying")
+	}
+	// The result message shows a notice.
+	mm, _ := m.Update(res)
+	m = mm.(Model)
+	if !strings.Contains(stripANSI(m.View().Content), "applied edit to Pod default/a") {
+		t.Error("notice missing after edit")
+	}
+}
+
+func TestEditConflictAndInvalidSurface(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"conflict", k8s.ErrEditConflict{Detail: "the object has been modified"}, "the object has been modified"},
+		{"invalid", k8s.ErrEditInvalid{Detail: "spec.replicas: Invalid value"}, "Invalid value"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTest(t)
+			m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+			m, prepMsg := prep(t, m)
+			fed(m).err = tc.err
+			edited := strings.Replace(prepMsg.original, "nginx:1.0", "nginx:2.0", 1)
+			_ = osWrite(prepMsg.path, edited)
+			done := editorDoneMsg{tgt: target{res: k8s.Pods, namespace: "default", name: "a"}, path: prepMsg.path, original: prepMsg.original}
+			res := applyEdit(fed(m), done)().(editResultMsg)
+			mm, _ := m.Update(res)
+			m = mm.(Model)
+			if !strings.Contains(stripANSI(m.View().Content), tc.want) {
+				t.Errorf("%s not surfaced:\n%s", tc.name, stripANSI(m.View().Content))
+			}
+		})
+	}
+}
+
+func TestEditFromObjectView(t *testing.T) {
+	m, _, _ := newTestFull(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, "enter") // detail view
+	m = openObject(m)
+	_, cmd := press(m, "e")
+	if cmd == nil {
+		t.Fatal("e should prepare an edit from the object view")
+	}
+	if _, ok := cmd().(editPrepMsg); !ok {
+		t.Fatalf("expected editPrepMsg, got %T", cmd())
+	}
+}
+
+func osStat(p string) (os.FileInfo, error) { return os.Stat(p) }
+func osWrite(p, content string) error      { return os.WriteFile(p, []byte(content), 0o600) }
