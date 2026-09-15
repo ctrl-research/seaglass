@@ -674,6 +674,22 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				ns = rv.namespace
 			}
 			return m, prepareEdit(m.deps.edit, m.saveDir, target{res: rv.res, namespace: ns, name: row.Name})
+		case is(msg, keys.CopyRef):
+			row, ok := rv.selectedRow()
+			if !ok {
+				return m, nil
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			ctx := ""
+			if m.client != nil {
+				ctx = m.client.Context
+			}
+			cmd := m.palette.showWith(copyItems(rv.res, ns, row.Name, ctx), "copy…")
+			rv.resize(m.width, m.bodyHeight())
+			return m, cmd
 		case is(msg, keys.Detail), is(msg, keys.YAML):
 			row, ok := rv.selectedRow()
 			if !ok {
@@ -835,6 +851,8 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 		tgt := *m.fwdTarget
 		m.fwdTarget = nil
 		return startForward(m.deps.fwd, tgt.res, tgt.namespace, tgt.name, 0, uint16(it.Index))
+	case itemCopy:
+		return tea.Batch(tea.SetClipboard(it.Text), m.setNotice("copied: "+it.Text))
 	case itemSince:
 		if lv, ok := m.top().(*logsView); ok {
 			return lv.setSince(it.Since)

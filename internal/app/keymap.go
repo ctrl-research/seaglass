@@ -22,6 +22,7 @@ type keyMap struct {
 	Detail  key.Binding
 	YAML    key.Binding
 	Edit    key.Binding
+	CopyRef key.Binding
 
 	// Object view
 	ModeYAML   key.Binding
@@ -73,6 +74,7 @@ var keys = keyMap{
 	Detail:  bind("enter", "detail", "enter", "d"),
 	YAML:    bind("y", "yaml", "y"),
 	Edit:    bind("e", "edit in $EDITOR", "e"),
+	CopyRef: bind("c", "copy name / kubectl command", "c"),
 
 	ModeYAML:   bind("y", "show yaml", "y"),
 	ModeDetail: bind("d", "show detail", "d"),

@@ -27,6 +27,7 @@ const (
 	itemSince
 	itemExec
 	itemPort
+	itemCopy
 )
 
 func (k itemKind) String() string {
@@ -47,6 +48,8 @@ func (k itemKind) String() string {
 		return "shell"
 	case itemPort:
 		return "port"
+	case itemCopy:
+		return "copy"
 	default:
 		return "context"
 	}
@@ -68,6 +71,7 @@ type paletteItem struct {
 	Name     string       // namespace or context name
 	Index    int          // column index when Kind == itemSort
 	Since    time.Duration
+	Text     string // clipboard text when Kind == itemCopy
 	search   string
 }
 
@@ -355,6 +359,38 @@ func execItems(containers []string) []paletteItem {
 	items := make([]paletteItem, 0, len(containers))
 	for _, c := range containers {
 		items = append(items, paletteItem{Kind: itemExec, Label: c, Detail: "open a shell in this container", Name: c, search: strings.ToLower(c + " shell exec")})
+	}
+	return items
+}
+
+// copyItems builds the copy picker for a selected object.
+func copyItems(res k8s.Resource, namespace, name, context string) []paletteItem {
+	kubectl := "kubectl"
+	if context != "" {
+		kubectl += " --context " + context
+	}
+	nsFlag := ""
+	if namespace != "" {
+		nsFlag = " -n " + namespace
+	}
+	ref := res.Name() + "/" + name
+	full := name
+	if namespace != "" {
+		full = namespace + "/" + name
+	}
+	entries := []struct{ label, detail, text string }{
+		{"name", name, name},
+		{"namespace/name", full, full},
+		{"kubectl get", kubectl + nsFlag + " get " + ref, kubectl + nsFlag + " get " + ref},
+		{"kubectl describe", kubectl + nsFlag + " describe " + ref, kubectl + nsFlag + " describe " + ref},
+		{"kubectl get -o yaml", "…get " + ref + " -o yaml", kubectl + nsFlag + " get " + ref + " -o yaml"},
+	}
+	if namespace != "" {
+		entries = append(entries[:1], append([]struct{ label, detail, text string }{{"namespace", namespace, namespace}}, entries[1:]...)...)
+	}
+	items := make([]paletteItem, len(entries))
+	for i, e := range entries {
+		items[i] = paletteItem{Kind: itemCopy, Label: e.label, Detail: e.detail, Text: e.text, search: strings.ToLower(e.label + " " + e.text)}
 	}
 	return items
 }
