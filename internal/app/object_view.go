@@ -141,7 +141,7 @@ func (v *objectView) handleKey(msg tea.KeyPressMsg, width, height int) (tea.Cmd,
 func (v *objectView) help() []helpSection {
 	km := v.vp.KeyMap
 	return []helpSection{
-		{"Object", []key.Binding{keys.ModeYAML, keys.ModeDetail, keys.Edit, keys.Owner, keys.Copy, keys.Reload, keys.Top, keys.Bottom}},
+		{"Object", []key.Binding{keys.ModeYAML, keys.ModeDetail, keys.Edit, keys.Owner, keys.Related, keys.Copy, keys.Reload, keys.Top, keys.Bottom}},
 		{"Scroll", []key.Binding{km.Up, km.Down, km.PageUp, km.PageDown, km.HalfPageUp, km.HalfPageDown}},
 	}
 }
@@ -175,5 +175,5 @@ func (v *objectView) status() viewStatus {
 }
 
 func (v *objectView) hint() string {
-	return "y yaml  d detail  e edit  o owner  ? keys"
+	return "y yaml  d detail  e edit  o owner  J related  ? keys"
 }

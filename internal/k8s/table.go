@@ -89,7 +89,7 @@ func (s Status) String() string {
 // Stream lists then watches a resource, emitting a full Snapshot on every
 // change until ctx is cancelled. The channel is closed when ctx ends.
 // Watch expiry (410 Gone) and disconnects are handled by relisting.
-func (c *Client) Stream(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector string) <-chan Update {
+func (c *Client) Stream(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector, labelSelector string) <-chan Update {
 	out := make(chan Update, 1)
 	go func() {
 		defer close(out)
@@ -99,7 +99,7 @@ func (c *Client) Stream(ctx context.Context, gvr schema.GroupVersionResource, na
 			if ctx.Err() != nil {
 				return
 			}
-			rv, err := c.list(ctx, gvr, namespace, fieldSelector, st)
+			rv, err := c.list(ctx, gvr, namespace, fieldSelector, labelSelector, st)
 			if err != nil {
 				if !send(ctx, out, Update{Snapshot: st.snapshot(), Status: StatusError, Err: err}) {
 					return
@@ -117,7 +117,7 @@ func (c *Client) Stream(ctx context.Context, gvr schema.GroupVersionResource, na
 
 			// Watch from the list's resource version. Returns when the watch
 			// closes; relist is true when the server says our RV is too old.
-			relist, werr := c.watch(ctx, gvr, namespace, fieldSelector, rv, st, out)
+			relist, werr := c.watch(ctx, gvr, namespace, fieldSelector, labelSelector, rv, st, out)
 			if ctx.Err() != nil {
 				return
 			}
@@ -142,7 +142,7 @@ func (c *Client) Stream(ctx context.Context, gvr schema.GroupVersionResource, na
 	return out
 }
 
-func (c *Client) list(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector string, st *store) (string, error) {
+func (c *Client) list(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector, labelSelector string, st *store) (string, error) {
 	lctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req := c.rest.Get().
@@ -150,6 +150,9 @@ func (c *Client) list(ctx context.Context, gvr schema.GroupVersionResource, name
 		SetHeader("Accept", tableAccept)
 	if fieldSelector != "" {
 		req = req.Param("fieldSelector", fieldSelector)
+	}
+	if labelSelector != "" {
+		req = req.Param("labelSelector", labelSelector)
 	}
 	raw, err := req.Do(lctx).Raw()
 	if err != nil {
@@ -168,7 +171,7 @@ func (c *Client) list(ctx context.Context, gvr schema.GroupVersionResource, name
 
 // watch runs one watch connection. It returns relist=true when the server
 // reports the resource version is gone, and a non-nil error on failure.
-func (c *Client) watch(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector, rv string, st *store, out chan Update) (relist bool, err error) {
+func (c *Client) watch(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector, labelSelector, rv string, st *store, out chan Update) (relist bool, err error) {
 	req := c.rest.Get().
 		AbsPath(resourcePath(gvr, namespace)...).
 		SetHeader("Accept", tableAccept).
@@ -177,6 +180,9 @@ func (c *Client) watch(ctx context.Context, gvr schema.GroupVersionResource, nam
 		Param("allowWatchBookmarks", "true")
 	if fieldSelector != "" {
 		req = req.Param("fieldSelector", fieldSelector)
+	}
+	if labelSelector != "" {
+		req = req.Param("labelSelector", labelSelector)
 	}
 	w, err := req.Watch(ctx)
 	if err != nil {

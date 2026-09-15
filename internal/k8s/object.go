@@ -122,3 +122,56 @@ func indexByte(s string, b byte) int {
 	}
 	return -1
 }
+
+// LabelSelectorString returns a "k=v,k2=v2" selector for an object that
+// carries one: a Service's spec.selector map, or a workload's
+// spec.selector.matchLabels. ok is false when there is no usable selector.
+func LabelSelectorString(u *unstructured.Unstructured) (string, bool) {
+	// Workloads: spec.selector.matchLabels
+	if ml, found, _ := unstructured.NestedStringMap(u.Object, "spec", "selector", "matchLabels"); found && len(ml) > 0 {
+		return joinSelector(ml), true
+	}
+	// Service: spec.selector is a flat map
+	if sel, found, _ := unstructured.NestedStringMap(u.Object, "spec", "selector"); found && len(sel) > 0 {
+		return joinSelector(sel), true
+	}
+	return "", false
+}
+
+// PodNodeName returns the node a pod is scheduled on.
+func PodNodeName(u *unstructured.Unstructured) (string, bool) {
+	n, found, _ := unstructured.NestedString(u.Object, "spec", "nodeName")
+	return n, found && n != ""
+}
+
+func joinSelector(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + "=" + m[k]
+	}
+	return joinComma(parts)
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}
+
+func joinComma(parts []string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += ","
+		}
+		out += p
+	}
+	return out
+}

@@ -122,7 +122,7 @@ func (c *Client) Resources(ctx context.Context) ([]Resource, error) {
 // NamespaceNames lists namespace names in the cluster.
 func (c *Client) NamespaceNames(ctx context.Context) ([]string, error) {
 	st := newStore()
-	if _, err := c.list(ctx, Namespaces.GVR, "", "", st); err != nil {
+	if _, err := c.list(ctx, Namespaces.GVR, "", "", "", st); err != nil {
 		return nil, err
 	}
 	snap := st.snapshot()

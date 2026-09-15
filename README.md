@@ -39,6 +39,7 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | `l` | Logs of the selected pod, all containers merged by time, following |
 | `E` | Events for the selected object, filtered by involved object; warnings highlighted |
 | `o` | Jump to the owner of the selected object (Pod → ReplicaSet → Deployment, Job → CronJob); repeat to walk up |
+| `J` | Jump to related resources: Deployment/Service → its pods by selector, Pod → its node, Node → its pods |
 | In logs: `c` container, `s` since window, `t` timestamps, `w` wrap, `f` follow, `/` regex filter, `S` save to file |
 | `y` | YAML of the selected object, managed fields stripped |
 | `e` | Edit the selected object in `$EDITOR` (`$KUBE_EDITOR` wins); save to apply, no change aborts |

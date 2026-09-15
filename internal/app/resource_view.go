@@ -27,7 +27,8 @@ type resourceView struct {
 	id            int
 	res           k8s.Resource
 	namespace     string // "" means all namespaces (or cluster scope)
-	fieldSelector string // optional server-side filter (e.g. events)
+	fieldSelector string // optional server-side field filter (e.g. events)
+	labelSelector string // optional server-side label filter (related pods)
 	title         string // crumb label override (e.g. "events")
 
 	cancel  context.CancelFunc
@@ -162,7 +163,7 @@ func (v *resourceView) start(d deps) tea.Cmd {
 	v.stop()
 	ctx, cancel := context.WithCancel(context.Background())
 	v.cancel = cancel
-	v.updates = d.stream.Stream(ctx, v.res, v.namespace, v.fieldSelector)
+	v.updates = d.stream.Stream(ctx, v.res, v.namespace, v.fieldSelector, v.labelSelector)
 	v.connStatus = k8s.StatusConnecting
 	return v.wait()
 }
@@ -312,7 +313,7 @@ func (v *resourceView) hint() string {
 func (v *resourceView) help() []helpSection {
 	km := v.table.KeyMap
 	return []helpSection{
-		{"Table", []key.Binding{keys.Filter, keys.Sort, keys.Reverse, keys.Columns, keys.Rollout, keys.Detail, keys.YAML, keys.Edit, keys.CopyRef, keys.Owner, keys.Events, keys.Logs, keys.Shell, keys.Forwards}},
+		{"Table", []key.Binding{keys.Filter, keys.Sort, keys.Reverse, keys.Columns, keys.Rollout, keys.Detail, keys.YAML, keys.Edit, keys.CopyRef, keys.Owner, keys.Related, keys.Events, keys.Logs, keys.Shell, keys.Forwards}},
 		{"Move", []key.Binding{km.LineUp, km.LineDown, km.PageUp, km.PageDown, km.HalfPageUp, km.HalfPageDown, km.GotoTop, km.GotoBottom}},
 	}
 }

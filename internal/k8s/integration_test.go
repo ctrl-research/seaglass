@@ -26,7 +26,7 @@ func TestStreamLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	pods := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-	ch := c.Stream(ctx, pods, "", "")
+	ch := c.Stream(ctx, pods, "", "", "")
 	for u := range ch {
 		if u.Err != nil {
 			t.Fatalf("stream error: %v", u.Err)

@@ -11,7 +11,7 @@ import (
 
 // streamer is the slice of k8s.Client a resource view needs.
 type streamer interface {
-	Stream(ctx context.Context, res k8s.Resource, namespace, fieldSelector string) <-chan k8s.Update
+	Stream(ctx context.Context, res k8s.Resource, namespace, fieldSelector, labelSelector string) <-chan k8s.Update
 }
 
 // getter is the slice of k8s.Client an object view needs.
@@ -22,8 +22,8 @@ type getter interface {
 // clientStreamer adapts k8s.Client to streamer.
 type clientStreamer struct{ c *k8s.Client }
 
-func (s clientStreamer) Stream(ctx context.Context, res k8s.Resource, ns, fieldSelector string) <-chan k8s.Update {
-	return s.c.Stream(ctx, res.GVR, ns, fieldSelector)
+func (s clientStreamer) Stream(ctx context.Context, res k8s.Resource, ns, fieldSelector, labelSelector string) <-chan k8s.Update {
+	return s.c.Stream(ctx, res.GVR, ns, fieldSelector, labelSelector)
 }
 
 // deps is what views need from the outside world. Tests inject fakes.

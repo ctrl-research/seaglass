@@ -28,6 +28,7 @@ const (
 	itemExec
 	itemPort
 	itemCopy
+	itemRelated
 )
 
 func (k itemKind) String() string {
@@ -50,6 +51,8 @@ func (k itemKind) String() string {
 		return "port"
 	case itemCopy:
 		return "copy"
+	case itemRelated:
+		return "jump"
 	default:
 		return "context"
 	}
@@ -393,6 +396,15 @@ func copyItems(res k8s.Resource, namespace, name, context string) []paletteItem 
 	items := make([]paletteItem, len(entries))
 	for i, e := range entries {
 		items[i] = paletteItem{Kind: itemCopy, Label: e.label, Detail: e.detail, Text: e.text, search: strings.ToLower(e.label + " " + e.text)}
+	}
+	return items
+}
+
+// relatedItems builds the picker for related jumps.
+func relatedItems(targets []relatedTarget) []paletteItem {
+	items := make([]paletteItem, len(targets))
+	for i, t := range targets {
+		items[i] = paletteItem{Kind: itemRelated, Label: t.label, Detail: t.detail, Index: i, search: strings.ToLower(t.label + " " + t.detail)}
 	}
 	return items
 }

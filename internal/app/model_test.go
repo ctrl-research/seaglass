@@ -34,10 +34,13 @@ type fakeStreamer struct {
 	chans []chan k8s.Update
 }
 
-func (f *fakeStreamer) Stream(ctx context.Context, res k8s.Resource, ns, fieldSelector string) <-chan k8s.Update {
+func (f *fakeStreamer) Stream(ctx context.Context, res k8s.Resource, ns, fieldSelector, labelSelector string) <-chan k8s.Update {
 	call := res.Name() + "/" + ns
 	if fieldSelector != "" {
 		call += "?" + fieldSelector
+	}
+	if labelSelector != "" {
+		call += "#" + labelSelector
 	}
 	f.calls = append(f.calls, call)
 	ch := make(chan k8s.Update, 4)
@@ -2226,5 +2229,94 @@ func TestOwnerJumpUnknownKind(t *testing.T) {
 	m = mm.(Model)
 	if !strings.Contains(stripANSI(m.View().Content), "CronJob is not a known resource") {
 		t.Errorf("expected an unknown-kind notice:\n%s", stripANSI(m.View().Content))
+	}
+}
+
+func TestRelatedDeploymentToPods(t *testing.T) {
+	m, _ := newTest(t)
+	fg := m.deps.get.(*fakeGetter)
+	fg.obj = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "web", "namespace": "default"},
+		"spec":     map[string]any{"selector": map[string]any{"matchLabels": map[string]any{"app": "web", "tier": "front"}}},
+	}}
+	// Point the view at deployments.
+	m, _ = press(m, ":")
+	m = typeStr(m, "deploy")
+	m, _ = press(m, "enter")
+	m = feed(m, k8s.Update{Snapshot: deploySnap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "J")
+	if cmd == nil {
+		t.Fatal("J should compute related")
+	}
+	mm, _ := m.Update(cmd()) // relatedMsg -> single target -> navigate
+	m = mm.(Model)
+	rv, ok := m.top().(*resourceView)
+	if !ok || rv.res.GVR != k8s.Pods.GVR || rv.labelSelector != "app=web,tier=front" {
+		t.Fatalf("related pods view wrong: %T sel=%q", m.top(), rv.labelSelector)
+	}
+	fs := m.deps.stream.(*fakeStreamer)
+	if last := fs.calls[len(fs.calls)-1]; last != "pods/default#app=web,tier=front" {
+		t.Errorf("stream call = %q", last)
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "› pods of web") {
+		t.Errorf("crumb:\n%s", stripANSI(m.View().Content))
+	}
+}
+
+func TestRelatedPodPicker(t *testing.T) {
+	m, _ := newTest(t)
+	// Node discovery for the node jump.
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{k8s.Pods, {GVR: schema.GroupVersionResource{Version: "v1", Resource: "nodes"}, Kind: "Node"}}})
+	m = mm.(Model)
+	fg := m.deps.get.(*fakeGetter)
+	fg.obj = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]any{"name": "a", "namespace": "default"},
+		"spec":     map[string]any{"nodeName": "node-1"},
+	}}
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "J")
+	mm, _ = m.Update(cmd())
+	m = mm.(Model)
+	// A pod with only a node has one related target -> navigates directly.
+	ov, ok := m.top().(*objectView)
+	if !ok || ov.res.Kind != "Node" || ov.name != "node-1" {
+		t.Fatalf("pod→node jump wrong: %T", m.top())
+	}
+}
+
+func TestRelatedNodeToPods(t *testing.T) {
+	m, _ := newTest(t)
+	fg := m.deps.get.(*fakeGetter)
+	fg.obj = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Node",
+		"metadata": map[string]any{"name": "node-1"},
+	}}
+	// Simulate a nodes table by switching resource via choose.
+	m.stack[0].(*resourceView).res = k8s.Resource{GVR: schema.GroupVersionResource{Version: "v1", Resource: "nodes"}, Kind: "Node"}
+	m = feed(m, k8s.Update{Snapshot: k8s.Snapshot{Columns: []k8s.Column{{Name: "Name"}}, Rows: []k8s.Row{{Name: "node-1", Cells: []string{"node-1"}}}}, Status: k8s.StatusLive})
+	m, cmd := press(m, "J")
+	mm, _ := m.Update(cmd())
+	m = mm.(Model)
+	rv, ok := m.top().(*resourceView)
+	if !ok || rv.fieldSelector != "spec.nodeName=node-1" {
+		t.Fatalf("node→pods wrong: %T sel=%q", m.top(), rv.fieldSelector)
+	}
+	fs := m.deps.stream.(*fakeStreamer)
+	if last := fs.calls[len(fs.calls)-1]; last != "pods/?spec.nodeName=node-1" {
+		t.Errorf("stream call = %q", last)
+	}
+}
+
+func TestRelatedNone(t *testing.T) {
+	m, _ := newTest(t)
+	// Default pod object has no selector, no nodeName.
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "J")
+	mm, _ := m.Update(cmd())
+	m = mm.(Model)
+	if !strings.Contains(stripANSI(m.View().Content), "no related resources") {
+		t.Errorf("expected no-related notice:\n%s", stripANSI(m.View().Content))
 	}
 }
