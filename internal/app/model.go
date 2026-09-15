@@ -392,6 +392,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case ownerJumpMsg:
+		return m.handleOwnerJump(msg)
+
 	case rolloutStatusMsg:
 		if rv, ok := m.top().(*rolloutView); ok && rv.id == msg.id {
 			return m, rv.handleStatus(msg)
@@ -720,6 +723,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				ns = rv.namespace
 			}
 			return m, prepareEdit(m.deps.edit, m.saveDir, target{res: rv.res, namespace: ns, name: row.Name})
+		case is(msg, keys.Owner):
+			row, ok := rv.selectedRow()
+			if !ok {
+				return m, nil
+			}
+			ns := row.Namespace
+			if ns == "" {
+				ns = rv.namespace
+			}
+			return m, m.jumpToOwner(rv.res, ns, row.Name, nil)
 		case is(msg, keys.CopyRef):
 			row, ok := rv.selectedRow()
 			if !ok {
@@ -760,6 +773,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, ov.start(m.deps)
 		case is(msg, keys.Edit):
 			return m, prepareEdit(m.deps.edit, m.saveDir, target{res: ov.res, namespace: ov.namespace, name: ov.name})
+		case is(msg, keys.Owner):
+			return m, m.jumpToOwner(ov.res, ov.namespace, ov.name, ov.obj)
 		}
 	}
 	if fv, ok := top.(*forwardsView); ok {

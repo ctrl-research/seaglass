@@ -1643,6 +1643,10 @@ func TestShellErrorShown(t *testing.T) {
 	}
 }
 
+func schemaGVRapp(group, resource string) schema.GroupVersionResource {
+	return schema.GroupVersionResource{Group: group, Version: "v1", Resource: resource}
+}
+
 func fed(m Model) *fakeEditor { return m.deps.edit.(*fakeEditor) }
 
 // prep runs prepareEdit for the selected row and returns the temp path and
@@ -2153,5 +2157,74 @@ func TestClusterEventsAction(t *testing.T) {
 	fs := m.deps.stream.(*fakeStreamer)
 	if last := fs.calls[len(fs.calls)-1]; last != "events/default" {
 		t.Errorf("cluster events stream = %q", last)
+	}
+}
+
+// podWithOwner sets the fake getter's object to a pod owned by a ReplicaSet.
+func podWithOwner(m Model, name, ownerKind, ownerName, ownerAPI string) {
+	tru := true
+	fg := m.deps.get.(*fakeGetter)
+	fg.obj = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Pod",
+		"metadata": map[string]any{
+			"name": name, "namespace": "default", "uid": "1",
+			"ownerReferences": []any{map[string]any{
+				"apiVersion": ownerAPI, "kind": ownerKind, "name": ownerName, "controller": tru,
+			}},
+		},
+	}}
+}
+
+func TestOwnerJumpFromTable(t *testing.T) {
+	m, _ := newTest(t)
+	// Discovery knows replicasets.
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{
+		k8s.Pods,
+		{GVR: schemaGVRapp("apps", "replicasets"), Kind: "ReplicaSet", Namespaced: true},
+		{GVR: schemaGVRapp("apps", "deployments"), Kind: "Deployment", Namespaced: true},
+	}})
+	m = mm.(Model)
+	podWithOwner(m, "a", "ReplicaSet", "web-rs", "apps/v1")
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "o")
+	if cmd == nil {
+		t.Fatal("o should fetch and jump")
+	}
+	mm, _ = m.Update(cmd()) // ownerJumpMsg -> handleOwnerJump
+	m = mm.(Model)
+	ov, ok := m.top().(*objectView)
+	if !ok || ov.res.Kind != "ReplicaSet" || ov.name != "web-rs" {
+		t.Fatalf("owner jump target = %T %+v", m.top(), m.top())
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "› replicasets › web-rs") {
+		t.Errorf("crumbs:\n%s", stripANSI(m.View().Content))
+	}
+}
+
+func TestOwnerJumpNoOwner(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	// fakeGetter default object has no ownerReferences.
+	m, cmd := press(m, "o")
+	mm, _ := m.Update(cmd())
+	m = mm.(Model)
+	if !strings.Contains(stripANSI(m.View().Content), "no owner reference") {
+		t.Errorf("expected a no-owner notice:\n%s", stripANSI(m.View().Content))
+	}
+	if _, ok := m.top().(*resourceView); !ok {
+		t.Error("should stay on the table when there is no owner")
+	}
+}
+
+func TestOwnerJumpUnknownKind(t *testing.T) {
+	m, _ := newTest(t)
+	// No discovery for the owner's kind.
+	podWithOwner(m, "a", "CronJob", "nightly", "batch/v1")
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "o")
+	mm, _ := m.Update(cmd())
+	m = mm.(Model)
+	if !strings.Contains(stripANSI(m.View().Content), "CronJob is not a known resource") {
+		t.Errorf("expected an unknown-kind notice:\n%s", stripANSI(m.View().Content))
 	}
 }
