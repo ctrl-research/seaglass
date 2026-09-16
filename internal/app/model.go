@@ -89,6 +89,7 @@ type Model struct {
 	saveDir       string
 	configActions []action
 	configJumps   []config.JumpRule
+	configBadges  []config.BadgeRule
 
 	width, height int
 }
@@ -138,6 +139,7 @@ func New(opts Options) Model {
 		state:         opts.State,
 		configActions: configActionsFromRules(opts.Ruleset.Actions),
 		configJumps:   opts.Ruleset.Jumps,
+		configBadges:  opts.Ruleset.Badges,
 	}
 	if m.deps.stream == nil && opts.Client != nil {
 		m.deps.stream = clientStreamer{opts.Client}
@@ -213,8 +215,16 @@ func (m *Model) top() view { return m.stack[len(m.stack)-1] }
 func (m *Model) pushResource(res k8s.Resource) *resourceView {
 	m.nextID++
 	v := newResourceView(m.nextID, res, m.namespace)
+	m.applyBadges(v)
 	m.stack = append(m.stack, v)
 	return v
+}
+
+// applyBadges attaches matching badge rules to a table view and, when any
+// match, requests full objects so the predicates can read conditions.
+func (m *Model) applyBadges(v *resourceView) {
+	v.badges = badgesFor(v.res, m.configBadges)
+	v.wantFullObjects = len(v.badges) > 0
 }
 
 // pushLogs adds a logs view for a pod. It does not start it.

@@ -245,7 +245,11 @@ Work items:
   to the `J` related-jump picker; field/label jumps open the target's
   detail, selector jumps open a filtered pods list. Detail Ready-state
   annotation on jump targets to follow.
-- [ ] Badge engine applied in every table view.
+- [x] Badge engine: badge rules color a row by style (ok/warning/error/
+  muted) and append a `(tag)` when a condition-status or field-equals
+  predicate holds. Rows carry the full object (includeObject=Object)
+  only for resource types a badge targets, so large tables are
+  unaffected.
 - [ ] Commands via ExecProcess with terminal release and restore.
 - [ ] Flux preset: reconcile (with source), suspend, resume; jumps for
   managed-by labels and `spec.sourceRef`; badges for Ready=False and

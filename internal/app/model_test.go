@@ -34,7 +34,7 @@ type fakeStreamer struct {
 	chans []chan k8s.Update
 }
 
-func (f *fakeStreamer) Stream(ctx context.Context, res k8s.Resource, ns, fieldSelector, labelSelector string) <-chan k8s.Update {
+func (f *fakeStreamer) Stream(ctx context.Context, res k8s.Resource, ns, fieldSelector, labelSelector string, fullObjects bool) <-chan k8s.Update {
 	call := res.Name() + "/" + ns
 	if fieldSelector != "" {
 		call += "?" + fieldSelector
@@ -2543,5 +2543,69 @@ func TestConfigJumpManagedByLabel(t *testing.T) {
 	ov, ok := m.top().(*objectView)
 	if !ok || ov.res.Kind != "Kustomization" || ov.name != "apps" || ov.namespace != "flux-system" {
 		t.Fatalf("managed-by jump wrong: %T %+v", m.top(), m.top())
+	}
+}
+
+func objRow(name, ns string, obj map[string]any) k8s.Row {
+	u := &unstructured.Unstructured{Object: obj}
+	return k8s.Row{Name: name, Namespace: ns, UID: name, Cells: []string{name, "info"}, Object: u}
+}
+
+func TestBadgeColorsAndTags(t *testing.T) {
+	rs := config.Ruleset{Badges: []config.BadgeRule{
+		{Name: "not ready", Match: config.Match{Group: "kustomize.toolkit.fluxcd.io"}, When: config.Predicate{Condition: "Ready", Status: "False"}, Style: "error", Tag: "not-ready"},
+		{Name: "suspended", Match: config.Match{Group: "kustomize.toolkit.fluxcd.io"}, When: config.Predicate{Field: "spec.suspend", Equals: "true"}, Style: "muted", Tag: "suspended"},
+	}}
+	m, _, _ := newTestWithRules(t, rs)
+	// The flux view should request full objects because a badge matches.
+	if !rv(m).wantFullObjects {
+		t.Error("a matching badge should request full objects")
+	}
+	// Two rows: one not-ready, one suspended, one clean.
+	notReady := objRow("apps", "flux-system", map[string]any{
+		"kind":   "Kustomization",
+		"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False"}}},
+	})
+	suspended := objRow("infra", "flux-system", map[string]any{
+		"kind": "Kustomization", "spec": map[string]any{"suspend": true},
+		"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
+	})
+	clean := objRow("ok", "flux-system", map[string]any{
+		"kind":   "Kustomization",
+		"status": map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
+	})
+	sn := k8s.Snapshot{Columns: []k8s.Column{{Name: "Name"}, {Name: "Info"}}, Rows: []k8s.Row{notReady, suspended, clean}}
+	m = feed(m, k8s.Update{Snapshot: sn, Status: k8s.StatusLive})
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "apps (not-ready)") {
+		t.Errorf("not-ready tag missing:\n%s", out)
+	}
+	if !strings.Contains(out, "infra (suspended)") {
+		t.Errorf("suspended tag missing:\n%s", out)
+	}
+	if strings.Contains(out, "ok (") {
+		t.Error("clean row should have no tag")
+	}
+	// The not-ready row is colored error (203).
+	raw := m.View().Content
+	if !strings.Contains(raw, "203") {
+		t.Error("not-ready row should be colored error")
+	}
+}
+
+func TestBadgeNoMatchNoFullObjects(t *testing.T) {
+	// A badge that targets flux does not affect a pods view.
+	rs := config.Ruleset{Badges: []config.BadgeRule{
+		{Name: "nr", Match: config.Match{Group: "kustomize.toolkit.fluxcd.io"}, When: config.Predicate{Condition: "Ready", Status: "False"}, Style: "error"},
+	}}
+	fs := &fakeStreamer{}
+	m := New(Options{
+		Client: &k8s.Client{Context: "c", Namespace: "default"}, Namespace: "default", Resource: k8s.Pods,
+		SaveDir: t.TempDir(), streamer: fs, getter: &fakeGetter{}, patcher: &fakePatcher{},
+		logger: &fakeLogger{}, execer: &fakeExecer{}, editer: &fakeEditor{}, forwarder: &fakeForwarder{},
+		contexts: []string{"c"}, Ruleset: rs,
+	})
+	if rv(m).wantFullObjects {
+		t.Error("a non-matching badge should not force full objects on pods")
 	}
 }

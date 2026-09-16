@@ -34,6 +34,9 @@ type Row struct {
 	Namespace string
 	UID       string
 	Cells     []string
+	// Object is the full object when the stream requested includeObject=Object
+	// (used for badge predicates); nil otherwise.
+	Object *unstructured.Unstructured
 }
 
 // Key identifies a row across events. UID is preferred; namespace/name is the
@@ -89,7 +92,7 @@ func (s Status) String() string {
 // Stream lists then watches a resource, emitting a full Snapshot on every
 // change until ctx is cancelled. The channel is closed when ctx ends.
 // Watch expiry (410 Gone) and disconnects are handled by relisting.
-func (c *Client) Stream(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector, labelSelector string) <-chan Update {
+func (c *Client) Stream(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector, labelSelector string, fullObjects bool) <-chan Update {
 	out := make(chan Update, 1)
 	go func() {
 		defer close(out)
@@ -99,7 +102,7 @@ func (c *Client) Stream(ctx context.Context, gvr schema.GroupVersionResource, na
 			if ctx.Err() != nil {
 				return
 			}
-			rv, err := c.list(ctx, gvr, namespace, fieldSelector, labelSelector, st)
+			rv, err := c.list(ctx, gvr, namespace, fieldSelector, labelSelector, fullObjects, st)
 			if err != nil {
 				if !send(ctx, out, Update{Snapshot: st.snapshot(), Status: StatusError, Err: err}) {
 					return
@@ -117,7 +120,7 @@ func (c *Client) Stream(ctx context.Context, gvr schema.GroupVersionResource, na
 
 			// Watch from the list's resource version. Returns when the watch
 			// closes; relist is true when the server says our RV is too old.
-			relist, werr := c.watch(ctx, gvr, namespace, fieldSelector, labelSelector, rv, st, out)
+			relist, werr := c.watch(ctx, gvr, namespace, fieldSelector, labelSelector, fullObjects, rv, st, out)
 			if ctx.Err() != nil {
 				return
 			}
@@ -142,7 +145,7 @@ func (c *Client) Stream(ctx context.Context, gvr schema.GroupVersionResource, na
 	return out
 }
 
-func (c *Client) list(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector, labelSelector string, st *store) (string, error) {
+func (c *Client) list(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector, labelSelector string, fullObjects bool, st *store) (string, error) {
 	lctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req := c.rest.Get().
@@ -153,6 +156,9 @@ func (c *Client) list(ctx context.Context, gvr schema.GroupVersionResource, name
 	}
 	if labelSelector != "" {
 		req = req.Param("labelSelector", labelSelector)
+	}
+	if fullObjects {
+		req = req.Param("includeObject", "Object")
 	}
 	raw, err := req.Do(lctx).Raw()
 	if err != nil {
@@ -171,7 +177,7 @@ func (c *Client) list(ctx context.Context, gvr schema.GroupVersionResource, name
 
 // watch runs one watch connection. It returns relist=true when the server
 // reports the resource version is gone, and a non-nil error on failure.
-func (c *Client) watch(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector, labelSelector, rv string, st *store, out chan Update) (relist bool, err error) {
+func (c *Client) watch(ctx context.Context, gvr schema.GroupVersionResource, namespace, fieldSelector, labelSelector string, fullObjects bool, rv string, st *store, out chan Update) (relist bool, err error) {
 	req := c.rest.Get().
 		AbsPath(resourcePath(gvr, namespace)...).
 		SetHeader("Accept", tableAccept).
@@ -183,6 +189,9 @@ func (c *Client) watch(ctx context.Context, gvr schema.GroupVersionResource, nam
 	}
 	if labelSelector != "" {
 		req = req.Param("labelSelector", labelSelector)
+	}
+	if fullObjects {
+		req = req.Param("includeObject", "Object")
 	}
 	w, err := req.Watch(ctx)
 	if err != nil {
@@ -339,11 +348,15 @@ func toRow(tr *metav1.TableRow) Row {
 		r.Cells[i] = formatCell(c)
 	}
 	if len(tr.Object.Raw) > 0 {
-		var meta metav1.PartialObjectMetadata
-		if err := json.Unmarshal(tr.Object.Raw, &meta); err == nil {
-			r.Name = meta.Name
-			r.Namespace = meta.Namespace
-			r.UID = string(meta.UID)
+		u := &unstructured.Unstructured{}
+		if err := u.UnmarshalJSON(tr.Object.Raw); err == nil {
+			r.Name = u.GetName()
+			r.Namespace = u.GetNamespace()
+			r.UID = string(u.GetUID())
+			// Keep the full object only when it is one (not PartialObjectMetadata).
+			if u.GetKind() != "PartialObjectMetadata" {
+				r.Object = u
+			}
 		}
 	}
 	if r.Name == "" && len(r.Cells) > 0 {
