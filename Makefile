@@ -3,7 +3,7 @@ MODULE  := github.com/ctrl-research/seaglass
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build run test test-integration lint tidy clean
+.PHONY: build run test test-integration demo-flux lint tidy clean
 
 build:
 	go build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) ./cmd/$(BINARY)
@@ -13,6 +13,11 @@ run: build
 
 test:
 	go test ./... -race -count=1
+
+# Install Flux into the kind cluster with working and broken fixtures.
+.PHONY: demo-flux
+demo-flux:
+	hack/demo-flux.sh
 
 # Runs against a real cluster. Example: make test-integration CONTEXT=kind-seaglass-dev
 test-integration:
