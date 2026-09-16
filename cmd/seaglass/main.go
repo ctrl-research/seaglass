@@ -29,6 +29,11 @@ func main() {
 }
 
 func run() error {
+	// Subcommands come before the TUI flags.
+	if len(os.Args) > 1 && os.Args[1] == "presets" {
+		return runPresets(os.Args[2:])
+	}
+
 	var (
 		kubeContext string
 		namespace   string
@@ -129,4 +134,44 @@ func setupLogging(debug bool) (func(), error) {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	return func() { _ = f.Close() }, nil
+}
+
+// runPresets implements `seaglass presets [list|show <name>|validate]`.
+func runPresets(args []string) error {
+	cmd := "list"
+	if len(args) > 0 {
+		cmd = args[0]
+	}
+	switch cmd {
+	case "list":
+		presets, err := config.Presets()
+		if err != nil {
+			return err
+		}
+		for _, p := range presets {
+			fmt.Printf("%-10s  %d actions, %d jumps, %d badges, %d commands\n",
+				p.Name, len(p.Rules.Actions), len(p.Rules.Jumps), len(p.Rules.Badges), len(p.Rules.Commands))
+		}
+		return nil
+	case "show":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: seaglass presets show <name>")
+		}
+		y, err := config.PresetYAML(args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Print(y)
+		return nil
+	case "validate":
+		// Validate the effective config (presets + user file).
+		if _, err := config.Load(); err != nil {
+			return err
+		}
+		path, _ := config.UserConfigPath()
+		fmt.Printf("ok: presets and %s are valid\n", path)
+		return nil
+	default:
+		return fmt.Errorf("unknown presets command %q (use list, show, or validate)", cmd)
+	}
 }

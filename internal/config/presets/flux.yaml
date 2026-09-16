@@ -1,0 +1,62 @@
+# Flux (fluxcd.io) preset: reconcile, suspend/resume, source jumps, and
+# not-ready badges for the GitOps toolkit CRDs. Requires Flux installed.
+actions:
+  - name: reconcile
+    desc: reconcile now
+    key: R
+    match: {group: "*.toolkit.fluxcd.io"}
+    patch:
+      metadata:
+        annotations:
+          reconcile.fluxcd.io/requestedAt: "{{now}}"
+    wait:
+      field: status.lastHandledReconcileAt
+      equals: "{{now}}"
+      timeout: 60s
+
+  - name: suspend
+    desc: suspend reconciliation
+    match: {group: "*.toolkit.fluxcd.io"}
+    confirm: true
+    patch:
+      spec:
+        suspend: true
+
+  - name: resume
+    desc: resume reconciliation
+    match: {group: "*.toolkit.fluxcd.io"}
+    patch:
+      spec:
+        suspend: false
+
+jumps:
+  - name: source
+    match: {group: "kustomize.toolkit.fluxcd.io"}
+    from: {field: spec.sourceRef}
+  - name: source
+    match: {group: "helm.toolkit.fluxcd.io"}
+    from: {field: spec.chart.spec.sourceRef}
+  - name: managed by (kustomize)
+    match: {}
+    from:
+      nameLabel: kustomize.toolkit.fluxcd.io/name
+      namespaceLabel: kustomize.toolkit.fluxcd.io/namespace
+    to: {group: kustomize.toolkit.fluxcd.io, kind: Kustomization}
+  - name: managed by (helm)
+    match: {}
+    from:
+      nameLabel: helm.toolkit.fluxcd.io/name
+      namespaceLabel: helm.toolkit.fluxcd.io/namespace
+    to: {group: helm.toolkit.fluxcd.io, kind: HelmRelease}
+
+badges:
+  - name: not ready
+    match: {group: "*.toolkit.fluxcd.io"}
+    when: {condition: Ready, status: "False"}
+    style: error
+    tag: not-ready
+  - name: suspended
+    match: {group: "*.toolkit.fluxcd.io"}
+    when: {field: spec.suspend, equals: "true"}
+    style: muted
+    tag: suspended
