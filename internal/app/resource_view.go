@@ -11,6 +11,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/ctrl-research/seaglass/internal/config"
+
 	"github.com/ctrl-research/seaglass/internal/k8s"
 	"github.com/ctrl-research/seaglass/internal/ui"
 )
@@ -30,6 +32,10 @@ type resourceView struct {
 	fieldSelector string // optional server-side field filter (e.g. events)
 	labelSelector string // optional server-side label filter (related pods)
 	title         string // crumb label override (e.g. "events")
+	// wantFullObjects requests includeObject=Object so badges can read
+	// conditions and spec fields; set when a badge rule matches the resource.
+	wantFullObjects bool
+	badges          []config.BadgeRule
 
 	cancel  context.CancelFunc
 	updates <-chan k8s.Update
@@ -168,7 +174,7 @@ func (v *resourceView) start(d deps) tea.Cmd {
 	v.stop()
 	ctx, cancel := context.WithCancel(context.Background())
 	v.cancel = cancel
-	v.updates = d.stream.Stream(ctx, v.res, v.namespace, v.fieldSelector, v.labelSelector)
+	v.updates = d.stream.Stream(ctx, v.res, v.namespace, v.fieldSelector, v.labelSelector, v.wantFullObjects)
 	v.connStatus = k8s.StatusConnecting
 	return v.wait()
 }
@@ -239,8 +245,26 @@ func (v *resourceView) layout(width, height int, selectedKey string) {
 		}
 		columns[v.sortCol].Name += arrow
 	}
+	// Badges: decorate rows (append tags) before fitting so widths include
+	// them, and record each row's style for coloring.
+	displayRows := v.filtered
+	var rowStyles []string
+	if len(v.badges) > 0 {
+		var badges []*rowBadge
+		displayRows, badges = decorateBadges(v.filtered, v.badges)
+		rowStyles = make([]string, len(badges))
+		for i, b := range badges {
+			if b != nil {
+				rowStyles[i] = b.style
+			}
+		}
+	}
 	// Widths come from every row so columns do not jump while typing.
-	cols, idx := ui.FitColumns(columns, v.snapshot.Rows, width, v.colMode)
+	widthRows := v.snapshot.Rows
+	if len(v.badges) > 0 {
+		widthRows = displayRows
+	}
+	cols, idx := ui.FitColumns(columns, widthRows, width, v.colMode)
 	v.colIdx = idx
 	v.table.SetWidth(width)
 	h := height - 1 // header
@@ -253,6 +277,8 @@ func (v *resourceView) layout(width, height int, selectedKey string) {
 	v.table.SetRows(nil)
 	v.table.SetColumns(cols)
 	switch {
+	case len(v.badges) > 0:
+		v.table.SetRows(ui.ProjectRowsBadged(displayRows, idx, rowStyles))
 	case v.warnCol >= 0:
 		v.table.SetRows(ui.ProjectRowsWarn(v.filtered, idx, v.warnCol))
 	case v.statusCol >= 0:

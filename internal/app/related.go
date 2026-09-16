@@ -202,6 +202,7 @@ func (m *Model) navigateRelated(t relatedTarget) tea.Cmd {
 		v := newResourceView(m.nextID, k8s.Pods, t.namespace)
 		v.labelSelector = t.selector
 		v.title = t.title
+		m.applyBadges(v)
 		m.stack = append(m.stack, v)
 		return m.startTop()
 	case relPodsOnNode:
@@ -210,6 +211,7 @@ func (m *Model) navigateRelated(t relatedTarget) tea.Cmd {
 		v := newResourceView(m.nextID, k8s.Pods, "")
 		v.fieldSelector = "spec.nodeName=" + t.nodeName
 		v.title = t.title
+		m.applyBadges(v)
 		m.stack = append(m.stack, v)
 		return m.startTop()
 	case relNode:

@@ -104,4 +104,5 @@ rule fetches the object, renders its patch template (with `{{now}}`,
 for its predicate. Jumps add to the `J` related-jump picker: a field
 reference (`spec.sourceRef`), a label pair (managed-by), or a label
 selector. Config actions appear on their key and in the palette. Badges
-land in the following change.
+color a row and add a `(tag)` when a condition or field predicate holds;
+the table fetches full objects only for resource types a badge targets.

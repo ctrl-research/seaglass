@@ -274,3 +274,44 @@ func StatusColumn(cols []k8s.Column) int {
 	}
 	return -1
 }
+
+// BadgeStyle maps a badge style name to a lipgloss style.
+func BadgeStyle(name string) (lipgloss.Style, bool) {
+	switch name {
+	case "ok":
+		return sevOKStyle, true
+	case "warning":
+		return sevWarnStyle, true
+	case "error":
+		return sevErrorStyle, true
+	case "muted":
+		return lipgloss.NewStyle().Faint(true), true
+	}
+	return lipgloss.Style{}, false
+}
+
+// ProjectRowsBadged colors each row whose styleName (parallel to rows) is
+// non-empty, wrapping every cell in that badge style.
+func ProjectRowsBadged(rows []k8s.Row, idx []int, styleNames []string) []table.Row {
+	out := make([]table.Row, len(rows))
+	for r, row := range rows {
+		var st lipgloss.Style
+		styled := false
+		if r < len(styleNames) && styleNames[r] != "" {
+			st, styled = BadgeStyle(styleNames[r])
+		}
+		cells := make(table.Row, len(idx))
+		for k, i := range idx {
+			val := ""
+			if i < len(row.Cells) {
+				val = row.Cells[i]
+			}
+			if styled {
+				val = st.Render(val)
+			}
+			cells[k] = val
+		}
+		out[r] = cells
+	}
+	return out
+}
