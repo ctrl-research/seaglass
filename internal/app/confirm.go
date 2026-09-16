@@ -21,7 +21,7 @@ type confirmDialog struct {
 }
 
 // actionConfirm builds a confirmation for a cluster action.
-func actionConfirm(p patcher, pa pendingAction) *confirmDialog {
+func actionConfirm(d deps, pa pendingAction) *confirmDialog {
 	detail := pa.tgt.String()
 	if pa.act.Input != nil {
 		detail = pa.act.Input.Label + ": " + pa.input
@@ -33,7 +33,7 @@ func actionConfirm(p patcher, pa pendingAction) *confirmDialog {
 		forceLabel: "force (grace period 0)",
 		run: func(force bool) tea.Cmd {
 			pa.force = force
-			return runAction(p, pa)
+			return runAction(d, pa)
 		},
 	}
 }
