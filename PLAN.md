@@ -240,8 +240,11 @@ Work items:
   patch, and poll for the wait predicate (field-equals or condition-status)
   until it holds or times out. Config actions share the palette, keys,
   confirm, force, and input flow with the built-ins.
-- [ ] Jump engine over the three jump kinds; detail view lists jumps with
-  the target's Ready state where the target has conditions.
+- [x] Jump engine over the three jump kinds (field reference, label pair,
+  label selector): config jumps are evaluated against the object and added
+  to the `J` related-jump picker; field/label jumps open the target's
+  detail, selector jumps open a filtered pods list. Detail Ready-state
+  annotation on jump targets to follow.
 - [ ] Badge engine applied in every table view.
 - [ ] Commands via ExecProcess with terminal release and restore.
 - [ ] Flux preset: reconcile (with source), suspend, resume; jumps for

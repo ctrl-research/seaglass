@@ -2487,3 +2487,61 @@ func TestWaitForActionFieldPredicate(t *testing.T) {
 		t.Errorf("unsatisfied predicate should time out, got %v", err)
 	}
 }
+
+func TestConfigJumpFieldRef(t *testing.T) {
+	// A Kustomization with spec.sourceRef -> GitRepository, plus a jump rule.
+	rs := config.Ruleset{Jumps: []config.JumpRule{
+		{Name: "source", Match: config.Match{Group: "kustomize.toolkit.fluxcd.io"}, From: config.JumpFrom{Field: "spec.sourceRef"}},
+	}}
+	m, _, fg := newTestWithRules(t, rs)
+	// Discovery includes GitRepository.
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{
+		{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", Namespaced: true},
+		{GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}, Kind: "GitRepository", Namespaced: true},
+	}})
+	m = mm.(Model)
+	fg.obj = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"name": "apps", "namespace": "flux-system"},
+		"spec":     map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "flux-system"}},
+	}}
+	m = feed(m, k8s.Update{Snapshot: fluxSnap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "J")
+	if cmd == nil {
+		t.Fatal("J should compute related")
+	}
+	mm, _ = m.Update(cmd()) // single target -> navigate
+	m = mm.(Model)
+	ov, ok := m.top().(*objectView)
+	if !ok || ov.res.Kind != "GitRepository" || ov.name != "flux-system" {
+		t.Fatalf("source jump target = %T %+v", m.top(), m.top())
+	}
+}
+
+func TestConfigJumpManagedByLabel(t *testing.T) {
+	// A Deployment labeled by a Kustomization; managed-by jump opens it.
+	rs := config.Ruleset{Jumps: []config.JumpRule{
+		{Name: "managed by", Match: config.Match{}, From: config.JumpFrom{NameLabel: "kustomize.toolkit.fluxcd.io/name", NamespaceLabel: "kustomize.toolkit.fluxcd.io/namespace"}, To: config.Match{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}},
+	}}
+	m, _, fg := newTestWithRules(t, rs)
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{
+		{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", Namespaced: true},
+	}})
+	m = mm.(Model)
+	fg.obj = &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "web", "namespace": "apps",
+			"labels": map[string]any{
+				"kustomize.toolkit.fluxcd.io/name":      "apps",
+				"kustomize.toolkit.fluxcd.io/namespace": "flux-system",
+			}},
+	}}
+	m = feed(m, k8s.Update{Snapshot: fluxSnap(), Status: k8s.StatusLive})
+	m, cmd := press(m, "J")
+	mm, _ = m.Update(cmd())
+	m = mm.(Model)
+	ov, ok := m.top().(*objectView)
+	if !ok || ov.res.Kind != "Kustomization" || ov.name != "apps" || ov.namespace != "flux-system" {
+		t.Fatalf("managed-by jump wrong: %T %+v", m.top(), m.top())
+	}
+}

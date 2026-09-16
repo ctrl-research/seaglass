@@ -101,5 +101,7 @@ seaglass presets validate   # checks presets + your seaglass.yaml
 Actions run through the same patch/wait paths as the built-ins: an action
 rule fetches the object, renders its patch template (with `{{now}}`,
 `{{.input}}`, and `{{.spec...}}` paths), applies the merge patch, and waits
-for its predicate. Config actions appear in the palette and on their key
-for matching resources. Jumps and badges land in the following changes.
+for its predicate. Jumps add to the `J` related-jump picker: a field
+reference (`spec.sourceRef`), a label pair (managed-by), or a label
+selector. Config actions appear on their key and in the palette. Badges
+land in the following change.

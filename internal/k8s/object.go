@@ -144,6 +144,9 @@ func PodNodeName(u *unstructured.Unstructured) (string, bool) {
 	return n, found && n != ""
 }
 
+// JoinLabelSelector renders a label map as "k=v,k2=v2", sorted.
+func JoinLabelSelector(m map[string]string) string { return joinSelector(m) }
+
 func joinSelector(m map[string]string) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -174,4 +177,62 @@ func joinComma(parts []string) string {
 		out += p
 	}
 	return out
+}
+
+// NestedRef reads an object reference (kind/name, optional namespace) at a
+// dotted path. apiGroup is read when present. ok is false if name is empty.
+func NestedRef(u *unstructured.Unstructured, path string) (kind, name, namespace, apiGroup string, ok bool) {
+	segs := splitDot(path)
+	m, found, _ := unstructured.NestedMap(u.Object, segs...)
+	if !found {
+		return "", "", "", "", false
+	}
+	kind, _ = m["kind"].(string)
+	name, _ = m["name"].(string)
+	namespace, _ = m["namespace"].(string)
+	// Flux sourceRef has no apiGroup; some refs carry apiGroup or apiVersion.
+	if g, ok := m["apiGroup"].(string); ok {
+		apiGroup = g
+	} else if av, ok := m["apiVersion"].(string); ok {
+		if i := indexByte(av, '/'); i >= 0 {
+			apiGroup = av[:i]
+		}
+	}
+	return kind, name, namespace, apiGroup, name != ""
+}
+
+// Label returns a metadata label value.
+func Label(u *unstructured.Unstructured, key string) (string, bool) {
+	v, ok := u.GetLabels()[key]
+	return v, ok
+}
+
+// ResourceByKindGroup finds a discovered resource by kind and exact group.
+func ResourceByKindGroup(resources []Resource, kind, group string) (Resource, bool) {
+	var fallback Resource
+	haveFallback := false
+	for _, r := range resources {
+		if r.Kind != kind {
+			continue
+		}
+		if r.GVR.Group == group {
+			return r, true
+		}
+		if !haveFallback {
+			fallback, haveFallback = r, true
+		}
+	}
+	return fallback, haveFallback
+}
+
+func splitDot(p string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(p); i++ {
+		if p[i] == '.' {
+			out = append(out, p[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, p[start:])
 }
