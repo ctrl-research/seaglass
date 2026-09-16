@@ -69,6 +69,12 @@ func Describe(u *unstructured.Unstructured, now time.Time) string {
 			b.WriteString(renderContainers(containers))
 		}
 	}
+	if status, ok := u.Object["status"].(map[string]any); ok {
+		if cs, ok := status["containerStatuses"].([]any); ok && len(cs) > 0 {
+			b.WriteString("\n" + descSectionStyle.Render("Container status") + "\n")
+			b.WriteString(renderContainerStatuses(cs))
+		}
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -204,4 +210,87 @@ func str(v any) string {
 	default:
 		return fmt.Sprint(x)
 	}
+}
+
+// renderContainerStatuses summarizes status.containerStatuses, highlighting
+// problem states (CrashLoopBackOff, OOMKilled, ImagePullBackOff, …) and
+// restart counts.
+func renderContainerStatuses(cs []any) string {
+	rows := [][]string{{"NAME", "READY", "RESTARTS", "STATE", "REASON"}}
+	var severities []Severity
+	severities = append(severities, SevNone) // header
+	for _, c := range cs {
+		m, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		ready := "false"
+		if r, ok := m["ready"].(bool); ok && r {
+			ready = "true"
+		}
+		state, reason := containerState(m)
+		rows = append(rows, []string{str(m["name"]), ready, str(m["restartCount"]), state, reason})
+		severities = append(severities, StatusSeverity(reason))
+	}
+	return renderTable(rows, func(row, col int, s string) string {
+		if row == 0 {
+			return descDimStyle.Render(s)
+		}
+		// Color the STATE and REASON cells by the row's severity.
+		if col >= 3 && row < len(severities) {
+			switch severities[row] {
+			case SevError:
+				return descFalseStyle.Render(s)
+			case SevWarn:
+				return descKeyStyle.Render(s)
+			}
+		}
+		if col == 1 && s == "false " || col == 1 && s == "false" {
+			return descFalseStyle.Render(s)
+		}
+		return s
+	})
+}
+
+// containerState returns a container's current state and its reason. It also
+// reports OOMKilled from a last-terminated state, which is the common way an
+// OOM shows up on a now-restarting container.
+func containerState(m map[string]any) (state, reason string) {
+	st, _ := m["state"].(map[string]any)
+	switch {
+	case has(st, "running"):
+		state = "Running"
+	case has(st, "waiting"):
+		state = "Waiting"
+		if w, ok := st["waiting"].(map[string]any); ok {
+			reason = str(w["reason"])
+		}
+	case has(st, "terminated"):
+		state = "Terminated"
+		if term, ok := st["terminated"].(map[string]any); ok {
+			reason = str(term["reason"])
+		}
+	}
+	// Surface an OOMKilled from the previous run when currently waiting.
+	if reason == "" || reason == "CrashLoopBackOff" {
+		if last, ok := m["lastState"].(map[string]any); ok {
+			if term, ok := last["terminated"].(map[string]any); ok {
+				if r := str(term["reason"]); r == "OOMKilled" {
+					reason = "OOMKilled"
+					if state == "Waiting" {
+						reason = "CrashLoopBackOff (OOMKilled)"
+					}
+				}
+			}
+		}
+	}
+	return state, reason
+}
+
+func has(m map[string]any, key string) bool {
+	if m == nil {
+		return false
+	}
+	_, ok := m[key]
+	return ok
 }

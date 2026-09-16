@@ -174,3 +174,103 @@ func ProjectRowsWarn(rows []k8s.Row, idx []int, warnCol int) []table.Row {
 	}
 	return out
 }
+
+// Severity ranks a status value for coloring.
+type Severity int
+
+const (
+	// SevNone leaves the value unstyled.
+	SevNone Severity = iota
+	// SevOK is a healthy/steady state.
+	SevOK
+	// SevWarn is transient or not-yet-ready.
+	SevWarn
+	// SevError is a failure that needs attention.
+	SevError
+)
+
+var (
+	sevOKStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
+	sevWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	sevErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
+)
+
+// errorStatuses and warnStatuses classify common pod/container status
+// values seen in the Status column.
+var errorStatuses = map[string]bool{
+	"CrashLoopBackOff": true, "Error": true, "ImagePullBackOff": true,
+	"ErrImagePull": true, "OOMKilled": true, "Evicted": true, "Failed": true,
+	"CreateContainerError": true, "CreateContainerConfigError": true,
+	"RunContainerError": true, "InvalidImageName": true, "ErrImageNeverPull": true,
+	"Unschedulable": true, "NodeLost": true, "DeadlineExceeded": true,
+}
+
+var warnStatuses = map[string]bool{
+	"Pending": true, "ContainerCreating": true, "PodInitializing": true,
+	"Terminating": true, "NotReady": true, "Init": true, "SchedulingGated": true,
+}
+
+// StatusSeverity classifies a Status-column value. "Init:0/2" and
+// "Init:Error" style by their prefix/suffix.
+func StatusSeverity(v string) Severity {
+	switch {
+	case v == "Running" || v == "Completed" || v == "Succeeded":
+		return SevOK
+	case errorStatuses[v]:
+		return SevError
+	case warnStatuses[v]:
+		return SevWarn
+	case strings.HasPrefix(v, "Init:"):
+		if strings.Contains(v, "Error") || strings.Contains(v, "CrashLoop") {
+			return SevError
+		}
+		return SevWarn
+	default:
+		return SevNone
+	}
+}
+
+// StyleStatus colors a value by its severity.
+func StyleStatus(v string) string {
+	switch StatusSeverity(v) {
+	case SevOK:
+		return sevOKStyle.Render(v)
+	case SevWarn:
+		return sevWarnStyle.Render(v)
+	case SevError:
+		return sevErrorStyle.Render(v)
+	default:
+		return v
+	}
+}
+
+// ProjectRowsStatus is like ProjectRows but colors the cell at statusCol by
+// its severity. statusCol < 0 disables it.
+func ProjectRowsStatus(rows []k8s.Row, idx []int, statusCol int) []table.Row {
+	out := make([]table.Row, len(rows))
+	for r, row := range rows {
+		cells := make(table.Row, len(idx))
+		for k, i := range idx {
+			val := ""
+			if i < len(row.Cells) {
+				val = row.Cells[i]
+			}
+			if i == statusCol {
+				val = StyleStatus(val)
+			}
+			cells[k] = val
+		}
+		out[r] = cells
+	}
+	return out
+}
+
+// StatusColumn returns the index of a "Status" column, or -1.
+func StatusColumn(cols []k8s.Column) int {
+	for i, c := range cols {
+		if strings.EqualFold(c.Name, "Status") {
+			return i
+		}
+	}
+	return -1
+}
