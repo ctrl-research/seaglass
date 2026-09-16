@@ -88,6 +88,7 @@ type Model struct {
 	lastSaved     string // fingerprint of the last persisted position
 	saveDir       string
 	configActions []action
+	configJumps   []config.JumpRule
 
 	width, height int
 }
@@ -136,6 +137,7 @@ func New(opts Options) Model {
 		version:       opts.Version,
 		state:         opts.State,
 		configActions: configActionsFromRules(opts.Ruleset.Actions),
+		configJumps:   opts.Ruleset.Jumps,
 	}
 	if m.deps.stream == nil && opts.Client != nil {
 		m.deps.stream = clientStreamer{opts.Client}
