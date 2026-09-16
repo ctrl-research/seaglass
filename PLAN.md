@@ -235,9 +235,11 @@ Work items:
 
 - [ ] Rule schema, loader, validation with line-numbered errors, and
   `seaglass presets list|show`.
-- [ ] Action engine: JSON merge patch with dry-run, template rendering,
-  confirm dialog, wait loop that watches one object until the predicate
-  holds or times out.
+- [x] Action engine: config action rules fetch the object, render the
+  patch template (with type coercion for ints/bools), apply the merge
+  patch, and poll for the wait predicate (field-equals or condition-status)
+  until it holds or times out. Config actions share the palette, keys,
+  confirm, force, and input flow with the built-ins.
 - [ ] Jump engine over the three jump kinds; detail view lists jumps with
   the target's Ready state where the target has conditions.
 - [ ] Badge engine applied in every table view.

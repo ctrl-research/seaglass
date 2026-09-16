@@ -105,6 +105,10 @@ func run() error {
 	}
 	slog.Info("starting", "version", version, "context", client.Context, "namespace", ns, "resource", res.Name())
 
+	rules, err := config.Load()
+	if err != nil {
+		return err
+	}
 	m := app.New(app.Options{
 		Client:    client,
 		Namespace: ns,
@@ -112,6 +116,7 @@ func run() error {
 		Version:   version,
 		State:     store,
 		SaveDir:   ".",
+		Ruleset:   rules,
 	})
 	_, err = tea.NewProgram(m).Run()
 	return err

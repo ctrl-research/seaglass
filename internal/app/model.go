@@ -35,6 +35,8 @@ type Options struct {
 	Version   string // seaglass build version for the header
 	// State persists the last context, namespace, and resource. Optional.
 	State stateStore
+	// Ruleset is the loaded operator config (presets + user). Optional.
+	Ruleset config.Ruleset
 
 	// SaveDir is where log files are written. Defaults to the working dir.
 	SaveDir string
@@ -82,9 +84,10 @@ type Model struct {
 	version       string // seaglass version
 	serverVersion string // fetched from /version
 
-	state     stateStore
-	lastSaved string // fingerprint of the last persisted position
-	saveDir   string
+	state         stateStore
+	lastSaved     string // fingerprint of the last persisted position
+	saveDir       string
+	configActions []action
 
 	width, height int
 }
@@ -123,15 +126,16 @@ type (
 // New builds the root model. Streaming starts in Init.
 func New(opts Options) Model {
 	m := Model{
-		client:    opts.Client,
-		deps:      deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger, exec: opts.execer, edit: opts.editer, fwd: opts.forwarder},
-		saveDir:   opts.SaveDir,
-		namespace: opts.Namespace,
-		palette:   newPalette(),
-		prompt:    newPrompt(),
-		contexts:  opts.contexts,
-		version:   opts.Version,
-		state:     opts.State,
+		client:        opts.Client,
+		deps:          deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger, exec: opts.execer, edit: opts.editer, fwd: opts.forwarder},
+		saveDir:       opts.SaveDir,
+		namespace:     opts.Namespace,
+		palette:       newPalette(),
+		prompt:        newPrompt(),
+		contexts:      opts.contexts,
+		version:       opts.Version,
+		state:         opts.State,
+		configActions: configActionsFromRules(opts.Ruleset.Actions),
 	}
 	if m.deps.stream == nil && opts.Client != nil {
 		m.deps.stream = clientStreamer{opts.Client}
@@ -568,10 +572,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmd, startForward(m.deps.fwd, tgt.res, tgt.namespace, tgt.name, 0, uint16(port)))
 			}
 			if p.act.Confirm {
-				m.confirm = actionConfirm(m.deps.patch, p)
+				m.confirm = actionConfirm(m.deps, p)
 				return m, cmd
 			}
-			return m, tea.Batch(cmd, runAction(m.deps.patch, p))
+			return m, tea.Batch(cmd, runAction(m.deps, p))
 		}
 		return m, cmd
 	}
@@ -608,7 +612,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var extra []paletteItem
 		if rv, ok := top.(*resourceView); ok {
 			if row, ok := rv.selectedRow(); ok {
-				extra = actionItems(rv.res, row)
+				extra = actionItems(rv.res, row, m.configActions)
 			}
 		}
 		cmd := m.palette.showExtra(extra)
@@ -621,7 +625,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// Actions and drill-down on the selected row of a table view.
 	if rv, ok := top.(*resourceView); ok {
-		for _, a := range actionsFor(rv.res) {
+		for _, a := range actionsFor(rv.res, m.configActions) {
 			if is(msg, a.Key) {
 				return m, m.trigger(a, rv)
 			}
@@ -863,10 +867,10 @@ func (m *Model) trigger(a action, rv *resourceView) tea.Cmd {
 		return cmd
 	}
 	if a.Confirm {
-		m.confirm = actionConfirm(m.deps.patch, pa)
+		m.confirm = actionConfirm(m.deps, pa)
 		return nil
 	}
-	return runAction(m.deps.patch, pa)
+	return runAction(m.deps, pa)
 }
 
 // shell pushes an embedded shell view for the container.
@@ -902,7 +906,7 @@ func (m *Model) setNotice(text string) tea.Cmd {
 func (m Model) helpSections() []ui.HelpSection {
 	secs := append([]helpSection{globalHelp()}, m.top().help()...)
 	if rv, ok := m.top().(*resourceView); ok {
-		if acts := actionsFor(rv.res); len(acts) > 0 {
+		if acts := actionsFor(rv.res, m.configActions); len(acts) > 0 {
 			bs := make([]key.Binding, 0, len(acts))
 			for _, a := range acts {
 				bs = append(bs, a.Key)
@@ -969,7 +973,7 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 			return m.openClusterEvents()
 		default:
 			if name, ok := strings.CutPrefix(it.Name, "act:"); ok {
-				if a, found := actionByName(name); found {
+				if a, found := actionByName(name, m.configActions); found {
 					if rv, isTable := m.top().(*resourceView); isTable {
 						return m.trigger(a, rv)
 					}

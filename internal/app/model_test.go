@@ -2354,3 +2354,136 @@ func TestResourceViewDecorationDefaults(t *testing.T) {
 		t.Errorf("decoration sentinels wrong: warnCol=%d statusCol=%d", v.warnCol, v.statusCol)
 	}
 }
+
+func newTestWithRules(t *testing.T, rs config.Ruleset) (Model, *fakeStreamer, *fakeGetter) {
+	t.Helper()
+	fs := &fakeStreamer{}
+	fg := &fakeGetter{obj: &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"name": "apps", "namespace": "flux-system"},
+		"status":   map[string]any{},
+	}}}
+	fluxRes := k8s.Resource{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", Namespaced: true}
+	m := New(Options{
+		Client:    &k8s.Client{Context: "test-ctx", Namespace: "flux-system"},
+		Namespace: "flux-system",
+		Resource:  fluxRes,
+		SaveDir:   t.TempDir(),
+		streamer:  fs,
+		getter:    fg,
+		patcher:   &fakePatcher{},
+		logger:    &fakeLogger{},
+		execer:    &fakeExecer{},
+		editer:    &fakeEditor{},
+		forwarder: &fakeForwarder{},
+		contexts:  []string{"test-ctx"},
+		Ruleset:   rs,
+	})
+	rv(m).start(m.deps)
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = mm.(Model)
+	return m, fs, fg
+}
+
+func fluxRuleset(t *testing.T) config.Ruleset {
+	t.Helper()
+	presets, err := config.Presets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range presets {
+		if p.Name == "flux" {
+			return p.Rules
+		}
+	}
+	t.Fatal("flux preset missing")
+	return config.Ruleset{}
+}
+
+func fluxSnap() k8s.Snapshot {
+	return k8s.Snapshot{
+		Columns: []k8s.Column{{Name: "Name"}, {Name: "Ready"}, {Name: "Status"}},
+		Rows:    []k8s.Row{{Name: "apps", Namespace: "flux-system", UID: "k1", Cells: []string{"apps", "True", "Applied"}}},
+	}
+}
+
+func TestConfigActionSuspendResume(t *testing.T) {
+	m, _, _ := newTestWithRules(t, fluxRuleset(t))
+	m = feed(m, k8s.Update{Snapshot: fluxSnap(), Status: k8s.StatusLive})
+	// The palette offers the flux actions for the selected Kustomization.
+	m, _ = press(m, ":")
+	labels := map[string]bool{}
+	for _, it := range m.palette.items {
+		labels[it.Label] = true
+	}
+	for _, want := range []string{"reconcile", "suspend", "resume"} {
+		if !labels[want] {
+			t.Errorf("palette missing flux action %q", want)
+		}
+	}
+	// Choose suspend: it confirms, then patches spec.suspend=true.
+	m = typeStr(m, "suspend")
+	m, _ = press(m, "enter")
+	if m.confirm == nil {
+		t.Fatal("suspend should confirm")
+	}
+	m, cmd := press(m, "y")
+	m = runResult(m, cmd)
+	fp := fp(m)
+	if len(fp.patches) != 1 || !strings.Contains(fp.patches[0], `"suspend":true`) {
+		t.Fatalf("suspend patch = %v", fp.patches)
+	}
+	if !strings.Contains(fp.patches[0], "kustomizations/flux-system/apps") {
+		t.Errorf("patched wrong object: %s", fp.patches[0])
+	}
+}
+
+func TestConfigActionResumePatches(t *testing.T) {
+	m, _, _ := newTestWithRules(t, fluxRuleset(t))
+	m = feed(m, k8s.Update{Snapshot: fluxSnap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	m = typeStr(m, "resume")
+	m, _ = press(m, "enter")
+	// resume has no confirm in the preset; it runs directly.
+	if m.confirm != nil {
+		t.Fatal("resume should not confirm")
+	}
+	// The choose returned a cmd; run it and its result.
+	// Re-open and choose to capture the cmd:
+	m2, _, _ := newTestWithRules(t, fluxRuleset(t))
+	m2 = feed(m2, k8s.Update{Snapshot: fluxSnap(), Status: k8s.StatusLive})
+	m2, _ = press(m2, ":")
+	m2 = typeStr(m2, "resume")
+	m2, cmd := press(m2, "enter")
+	if cmd == nil {
+		t.Fatal("resume should run a command")
+	}
+	execCmdInto(&m2, cmd)
+	fp := fp(m2)
+	if len(fp.patches) != 1 || !strings.Contains(fp.patches[0], `"suspend":false`) {
+		t.Fatalf("resume patch = %v", fp.patches)
+	}
+}
+
+func TestWaitForActionFieldPredicate(t *testing.T) {
+	// A wait on a status field that the fetched object already satisfies
+	// returns immediately.
+	fg := &fakeGetter{obj: &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"name": "apps", "namespace": "flux-system"},
+		"status":   map[string]any{"lastHandledReconcileAt": "T1"},
+	}}}
+	d := deps{get: fg}
+	tgt := target{res: k8s.Resource{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", Namespaced: true}, namespace: "flux-system", name: "apps"}
+	// Static equals "T1" so no template/now involved.
+	w := &config.WaitRule{Field: "status.lastHandledReconcileAt", Equals: "T1", Timeout: config.Duration(2 * time.Second)}
+	data := config.NewRenderData(fg.obj.Object, "", time.Now())
+	if err := waitForAction(d, tgt, w, data); err != nil {
+		t.Errorf("satisfied predicate should not error: %v", err)
+	}
+	// A predicate that never holds times out.
+	w2 := &config.WaitRule{Field: "status.lastHandledReconcileAt", Equals: "NEVER", Timeout: config.Duration(1 * time.Second)}
+	if err := waitForAction(d, tgt, w2, data); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("unsatisfied predicate should time out, got %v", err)
+	}
+}
