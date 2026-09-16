@@ -82,6 +82,8 @@ func newResourceView(id int, res k8s.Resource, ns string) *resourceView {
 		table:      table.New(table.WithFocused(true), table.WithStyles(styles)),
 		filter:     fi,
 		sortCol:    -1,
+		warnCol:    -1,
+		statusCol:  -2,
 	}
 }
 

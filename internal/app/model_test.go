@@ -2320,3 +2320,37 @@ func TestRelatedNone(t *testing.T) {
 		t.Errorf("expected no-related notice:\n%s", stripANSI(m.View().Content))
 	}
 }
+
+func TestPodTableColorsStatusColumn(t *testing.T) {
+	m, _ := newTest(t)
+	// A snapshot with a Status column and a failing pod.
+	sn := k8s.Snapshot{
+		Columns: []k8s.Column{{Name: "Name"}, {Name: "Ready"}, {Name: "Status"}, {Name: "Age"}},
+		Rows: []k8s.Row{
+			{Name: "ok", UID: "1", Cells: []string{"ok", "1/1", "Running", "1h"}},
+			{Name: "bad", UID: "2", Cells: []string{"bad", "0/1", "CrashLoopBackOff", "1h"}},
+		},
+	}
+	m = feed(m, k8s.Update{Snapshot: sn, Status: k8s.StatusLive})
+	rv := m.top().(*resourceView)
+	if rv.statusCol != 2 {
+		t.Fatalf("status column not resolved: %d", rv.statusCol)
+	}
+	// The rendered content colors the failing status (has an ANSI code that
+	// the plain text lacks).
+	raw := m.View().Content
+	if !strings.Contains(raw, "CrashLoopBackOff") {
+		t.Fatal("status text missing")
+	}
+	// Extract the styled cell: the error color 203 should wrap the status.
+	if !strings.Contains(raw, "203") {
+		t.Errorf("failing status should be colored (203):\n%q", raw)
+	}
+}
+
+func TestResourceViewDecorationDefaults(t *testing.T) {
+	v := newResourceView(1, k8s.Pods, "default")
+	if v.warnCol != -1 || v.statusCol != -2 {
+		t.Errorf("decoration sentinels wrong: warnCol=%d statusCol=%d", v.warnCol, v.statusCol)
+	}
+}
