@@ -2828,7 +2828,9 @@ func TestActionsToggle(t *testing.T) {
 }
 
 func TestGroupViewMergesAndSorts(t *testing.T) {
-	m, _ := newTest(t)
+	m, _, _ := newTestWithRules(t, config.Ruleset{Groups: []config.GroupRule{
+		{Name: "flux", Match: config.Match{Group: "*.toolkit.fluxcd.io"}},
+	}})
 	// Discovery with two flux kinds.
 	ks := k8s.Resource{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", Namespaced: true}
 	gr := k8s.Resource{GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}, Kind: "GitRepository", Namespaced: true}
@@ -2838,7 +2840,7 @@ func TestGroupViewMergesAndSorts(t *testing.T) {
 	m, _ = press(m, ":")
 	m = typeStr(m, "flux")
 	it, ok := m.palette.selected()
-	if !ok || it.Name != actionFluxGrp {
+	if !ok || it.Name != "group:flux" {
 		t.Fatalf("flux group action not first, got %+v", it)
 	}
 	m, _ = press(m, "enter")
@@ -2878,7 +2880,9 @@ func TestGroupViewMergesAndSorts(t *testing.T) {
 }
 
 func TestGroupViewEmpty(t *testing.T) {
-	m, _ := newTest(t)
+	m, _, _ := newTestWithRules(t, config.Ruleset{Groups: []config.GroupRule{
+		{Name: "flux", Match: config.Match{Group: "*.toolkit.fluxcd.io"}},
+	}})
 	// No flux resources discovered.
 	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{k8s.Pods}})
 	m = mm.(Model)

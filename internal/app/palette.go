@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/ctrl-research/seaglass/internal/config"
 	"github.com/ctrl-research/seaglass/internal/k8s"
 )
 
@@ -65,8 +66,6 @@ const (
 	actionForwards = "forwards"
 	actionEvents   = "events"
 	actionContexts = "clusters"
-	actionFluxGrp  = "flux"
-	actionWorkGrp  = "workloads"
 )
 
 // paletteItem is one selectable entry.
@@ -132,7 +131,7 @@ func newPalette() palette {
 }
 
 // buildItems assembles palette entries from cluster state.
-func buildItems(resources []k8s.Resource, namespaces, contexts []string) []paletteItem {
+func buildItems(resources []k8s.Resource, namespaces, contexts []string, groups []config.GroupRule) []paletteItem {
 	items := make([]paletteItem, 0, len(resources)+len(namespaces)+len(contexts))
 	for _, r := range resources {
 		detail := r.GroupVersion()
@@ -152,9 +151,10 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 	for _, c := range contexts {
 		items = append(items, paletteItem{Kind: itemContext, Label: c, Detail: "context · switch cluster", Name: c, search: strings.ToLower("ctx cluster context " + c)})
 	}
+	for _, g := range groups {
+		items = append(items, paletteItem{Kind: itemAction, Label: g.Name, Detail: g.Desc, Name: "group:" + g.Name, search: strings.ToLower(g.Name + " " + g.Desc + " group"), exact: []string{strings.ToLower(g.Name)}})
+	}
 	items = append(items,
-		paletteItem{Kind: itemAction, Label: "flux", Detail: "all Flux resources in one table, not-ready first", Name: actionFluxGrp, search: "flux gitops toolkit kustomization helmrelease", exact: []string{"flux"}},
-		paletteItem{Kind: itemAction, Label: "workloads", Detail: "deployments, statefulsets, daemonsets, jobs together", Name: actionWorkGrp, search: "workloads deployments statefulsets daemonsets jobs", exact: []string{"workloads"}},
 		paletteItem{Kind: itemAction, Label: "clusters", Detail: "switch context · a table of all clusters", Name: actionContexts, search: "clusters cluster ctx context switch", exact: []string{"clusters", "cluster"}},
 		paletteItem{Kind: itemAction, Label: "events", Detail: "cluster events, newest first, warnings highlighted", Name: actionEvents, search: "events warnings ev", exact: []string{"events"}},
 		paletteItem{Kind: itemAction, Label: "port-forwards", Detail: "list and cancel active port-forwards", Name: actionForwards, search: "port forwards proxy tunnel", exact: []string{"port-forwards", "forwards"}},

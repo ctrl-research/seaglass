@@ -97,8 +97,9 @@ hack/drive.exp 120 30 /tmp/out.raw --context kind-seaglass-dev -A -- ":" "deploy
 
 ## Operator presets (M4, in progress)
 
-seaglass ships declarative operator rules (actions, jumps, badges, commands)
-as embedded presets, starting with Flux. Users add or override rules in
+seaglass ships declarative operator rules (actions, jumps, badges, commands,
+and resource groups) as embedded presets, starting with Flux (and a small
+core preset for the workloads group). Users add or override rules in
 `$XDG_CONFIG_HOME/seaglass/seaglass.yaml`; `disablePresets: [flux]` turns one
 off. Inspect them with:
 

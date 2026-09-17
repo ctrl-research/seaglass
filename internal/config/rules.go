@@ -15,6 +15,7 @@ type Ruleset struct {
 	Jumps    []JumpRule    `yaml:"jumps"`
 	Badges   []BadgeRule   `yaml:"badges"`
 	Commands []CommandRule `yaml:"commands"`
+	Groups   []GroupRule   `yaml:"groups"`
 }
 
 // Match selects the resource types a rule applies to. Empty fields match
@@ -168,6 +169,30 @@ func (p Predicate) empty() bool {
 	return p.Condition == "" && p.Field == ""
 }
 
+// GroupRule defines a merged multi-kind table opened from the palette. Its
+// members are every discovered resource matching Match, or the explicit
+// Kinds list. Used for the flux and workloads groups; any operator can add
+// one in config.
+type GroupRule struct {
+	Name  string  `yaml:"name"`
+	Desc  string  `yaml:"desc,omitempty"`
+	Match Match   `yaml:"match,omitempty"`
+	Kinds []Match `yaml:"kinds,omitempty"`
+}
+
+// MemberMatch reports whether a resource belongs to the group.
+func (g GroupRule) MemberMatch(group, resource, kind string) bool {
+	if len(g.Kinds) > 0 {
+		for _, k := range g.Kinds {
+			if k.Matches(group, resource, kind) {
+				return true
+			}
+		}
+		return false
+	}
+	return !g.Match.empty() && g.Match.Matches(group, resource, kind)
+}
+
 // CommandRule runs an external program with the selected object's fields in
 // the environment. The escape hatch; explicitly the unsafe path.
 type CommandRule struct {
@@ -246,6 +271,18 @@ func (r Ruleset) Validate(source string) error {
 			add("%s: style %q must be one of ok, warning, error, muted", where, b.Style)
 		}
 	}
+	for i, g := range r.Groups {
+		where := fmt.Sprintf("group[%d]", i)
+		if g.Name != "" {
+			where = "group " + g.Name
+		}
+		if g.Name == "" {
+			add("%s: name is required", where)
+		}
+		if g.Match.empty() && len(g.Kinds) == 0 {
+			add("%s: set match or a non-empty kinds list", where)
+		}
+	}
 	for i, c := range r.Commands {
 		where := fmt.Sprintf("command[%d]", i)
 		if c.Name != "" {
@@ -271,4 +308,5 @@ func (r *Ruleset) Merge(other Ruleset) {
 	r.Jumps = append(r.Jumps, other.Jumps...)
 	r.Badges = append(r.Badges, other.Badges...)
 	r.Commands = append(r.Commands, other.Commands...)
+	r.Groups = append(r.Groups, other.Groups...)
 }

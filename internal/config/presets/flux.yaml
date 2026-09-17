@@ -60,3 +60,8 @@ badges:
     when: {field: spec.suspend, equals: "true"}
     style: muted
     tag: suspended
+
+groups:
+  - name: flux
+    desc: all Flux resources, not-ready first
+    match: {group: "*.toolkit.fluxcd.io"}

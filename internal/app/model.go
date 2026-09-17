@@ -93,6 +93,7 @@ type Model struct {
 	configActions []action
 	configJumps   []config.JumpRule
 	configBadges  []config.BadgeRule
+	configGroups  []config.GroupRule
 
 	width, height int
 }
@@ -145,6 +146,7 @@ func New(opts Options) Model {
 		configActions: configActionsFromRules(opts.Ruleset.Actions),
 		configJumps:   opts.Ruleset.Jumps,
 		configBadges:  opts.Ruleset.Badges,
+		configGroups:  opts.Ruleset.Groups,
 	}
 	if m.deps.stream == nil && opts.Client != nil {
 		m.deps.stream = clientStreamer{opts.Client}
@@ -303,7 +305,7 @@ func (m Model) bodyHeight() int {
 }
 
 func (m *Model) rebuildPalette() {
-	m.palette.setItems(buildItems(m.resources, m.namespaces, m.contexts))
+	m.palette.setItems(buildItems(m.resources, m.namespaces, m.contexts, m.configGroups))
 }
 
 // Update handles messages, then persists the position if it changed.
@@ -1058,20 +1060,10 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 			return m.openClusterEvents()
 		case actionContexts:
 			m.openContexts()
-		case actionFluxGrp:
-			return m.openGroup("flux", m.groupMembers(func(r k8s.Resource) bool {
-				return strings.HasSuffix(r.GVR.Group, ".toolkit.fluxcd.io")
-			}))
-		case actionWorkGrp:
-			return m.openGroup("workloads", m.groupMembers(func(r k8s.Resource) bool {
-				gr := r.GVR.Group + "/" + r.GVR.Resource
-				switch gr {
-				case "apps/deployments", "apps/statefulsets", "apps/daemonsets", "batch/jobs":
-					return true
-				}
-				return false
-			}))
 		default:
+			if name, ok := strings.CutPrefix(it.Name, "group:"); ok {
+				return m.openGroupByName(name)
+			}
 			if name, ok := strings.CutPrefix(it.Name, "act:"); ok {
 				if a, found := actionByName(name, m.configActions); found {
 					if rv, isTable := m.top().(*resourceView); isTable {
@@ -1107,16 +1099,22 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 	return nil
 }
 
-// groupMembers returns discovered namespaced list+watch resources matching
-// a predicate, in discovery order.
-func (m *Model) groupMembers(pred func(k8s.Resource) bool) []k8s.Resource {
-	var out []k8s.Resource
-	for _, r := range m.resources {
-		if pred(r) {
-			out = append(out, r)
+// openGroupByName resolves a config group's members against discovery and
+// opens the merged view.
+func (m *Model) openGroupByName(name string) tea.Cmd {
+	for _, g := range m.configGroups {
+		if g.Name != name {
+			continue
 		}
+		var members []k8s.Resource
+		for _, r := range m.resources {
+			if g.MemberMatch(r.GVR.Group, r.GVR.Resource, r.Kind) {
+				members = append(members, r)
+			}
+		}
+		return m.openGroup(name, members)
 	}
-	return out
+	return m.setNotice("no group named " + name)
 }
 
 // openGroup pushes a merged group view for the given members.
