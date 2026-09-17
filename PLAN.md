@@ -262,9 +262,11 @@ Work items:
   `lastAppliedRevision`, `lastAttemptedRevision`, `spec.dependsOn` with
   each dependency's Ready state at the top of Kustomization and
   HelmRelease detail.
-- [ ] Generic resource-group view: one table merging several streams with
-  a KIND column, not-ready first. Used by the `flux` group and a
-  `workloads` group (Deployments, StatefulSets, DaemonSets, Jobs).
+- [x] Generic resource-group view: one table merging several streams with
+  a KIND column (plus NAMESPACE/NAME/READY/STATUS/AGE from each object's
+  Ready condition), not-ready first. The palette `flux` group lists every
+  *.toolkit.fluxcd.io kind; `workloads` lists Deployments/StatefulSets/
+  DaemonSets/Jobs. Enter opens the selected object's detail.
 - [x] Fixtures: `make demo-flux` (hack/demo-flux.sh) installs Flux on the
   kind cluster and applies a working (podinfo) and a deliberately broken
   Kustomization, idempotently. Used to exercise the preset against real

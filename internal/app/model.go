@@ -420,6 +420,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case relatedMsg:
 		return m.handleRelated(msg)
 
+	case groupUpdateMsg:
+		if gv, ok := m.top().(*groupView); ok && gv.id == msg.id {
+			return m, gv.handle(msg)
+		}
+		return m, nil
+
 	case rolloutStatusMsg:
 		if rv, ok := m.top().(*rolloutView); ok && rv.id == msg.id {
 			return m, rv.handleStatus(msg)
@@ -826,6 +832,21 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.computeRelated(ov.res, ov.namespace, ov.name, ov.obj)
 		}
 	}
+	if gv, ok := top.(*groupView); ok {
+		switch {
+		case is(msg, keys.Detail), is(msg, keys.YAML), is(msg, keys.Accept):
+			if row, ok := gv.selectedRow(); ok {
+				mode := modeDetail
+				if is(msg, keys.YAML) {
+					mode = modeYAML
+				}
+				gv.stop()
+				m.pushObject(row.res, row.namespace, row.name, mode)
+				return m, m.startTop()
+			}
+			return m, nil
+		}
+	}
 	if cv, ok := top.(*contextsView); ok {
 		if is(msg, keys.Accept) {
 			if ci, ok := cv.selected(); ok {
@@ -1037,6 +1058,19 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 			return m.openClusterEvents()
 		case actionContexts:
 			m.openContexts()
+		case actionFluxGrp:
+			return m.openGroup("flux", m.groupMembers(func(r k8s.Resource) bool {
+				return strings.HasSuffix(r.GVR.Group, ".toolkit.fluxcd.io")
+			}))
+		case actionWorkGrp:
+			return m.openGroup("workloads", m.groupMembers(func(r k8s.Resource) bool {
+				gr := r.GVR.Group + "/" + r.GVR.Resource
+				switch gr {
+				case "apps/deployments", "apps/statefulsets", "apps/daemonsets", "batch/jobs":
+					return true
+				}
+				return false
+			}))
 		default:
 			if name, ok := strings.CutPrefix(it.Name, "act:"); ok {
 				if a, found := actionByName(name, m.configActions); found {
@@ -1071,6 +1105,31 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 		return nil
 	}
 	return nil
+}
+
+// groupMembers returns discovered namespaced list+watch resources matching
+// a predicate, in discovery order.
+func (m *Model) groupMembers(pred func(k8s.Resource) bool) []k8s.Resource {
+	var out []k8s.Resource
+	for _, r := range m.resources {
+		if pred(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// openGroup pushes a merged group view for the given members.
+func (m *Model) openGroup(title string, members []k8s.Resource) tea.Cmd {
+	if len(members) == 0 {
+		return m.setNotice("no " + title + " resources found in this cluster")
+	}
+	m.top().stop()
+	m.nextID++
+	v := newGroupView(m.nextID, title, members, m.namespace)
+	v.setNamespace(m.namespace)
+	m.stack = append(m.stack, v)
+	return m.startTop()
 }
 
 // openContexts pushes the contexts table.

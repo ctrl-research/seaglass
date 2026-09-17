@@ -2826,3 +2826,70 @@ func TestActionsToggle(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupViewMergesAndSorts(t *testing.T) {
+	m, _ := newTest(t)
+	// Discovery with two flux kinds.
+	ks := k8s.Resource{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", Namespaced: true}
+	gr := k8s.Resource{GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}, Kind: "GitRepository", Namespaced: true}
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{k8s.Pods, ks, gr}})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	m = typeStr(m, "flux")
+	it, ok := m.palette.selected()
+	if !ok || it.Name != actionFluxGrp {
+		t.Fatalf("flux group action not first, got %+v", it)
+	}
+	m, _ = press(m, "enter")
+	gv, ok := m.top().(*groupView)
+	if !ok || len(gv.members) != 2 {
+		t.Fatalf("flux group should have 2 members, got %T %+v", m.top(), m.top())
+	}
+	// Feed member snapshots with full objects (Ready conditions).
+	ready := func(name, status string) k8s.Row {
+		return k8s.Row{Name: name, Namespace: "flux-system", UID: name, Cells: []string{name},
+			Object: &unstructured.Unstructured{Object: map[string]any{
+				"metadata": map[string]any{"name": name, "namespace": "flux-system"},
+				"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": status, "message": status + " msg"}}},
+			}}}
+	}
+	mm, _ = m.Update(groupUpdateMsg{id: gv.id, member: 0, snap: k8s.Snapshot{Rows: []k8s.Row{ready("apps", "True"), ready("broken", "False")}}})
+	m = mm.(Model)
+	mm, _ = m.Update(groupUpdateMsg{id: gv.id, member: 1, snap: k8s.Snapshot{Rows: []k8s.Row{ready("repo", "True")}}})
+	m = mm.(Model)
+	out := stripANSI(m.View().Content)
+	for _, want := range []string{"KIND", "Kustomization", "GitRepository", "apps", "broken", "repo", "1 not ready · 3 objects"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("group view missing %q:\n%s", want, out)
+		}
+	}
+	// The not-ready row (broken) sorts to the top.
+	gv = m.top().(*groupView)
+	if gv.rows[0].name != "broken" {
+		t.Errorf("not-ready row should sort first, got %q", gv.rows[0].name)
+	}
+	// enter opens that object's detail with the right resource.
+	m, _ = press(m, "enter")
+	ov, ok := m.top().(*objectView)
+	if !ok || ov.res.Kind != "Kustomization" || ov.name != "broken" {
+		t.Fatalf("enter should open the selected object, got %T %+v", m.top(), m.top())
+	}
+}
+
+func TestGroupViewEmpty(t *testing.T) {
+	m, _ := newTest(t)
+	// No flux resources discovered.
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{k8s.Pods}})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	m = typeStr(m, "flux")
+	m, _ = press(m, "enter")
+	if _, ok := m.top().(*groupView); ok {
+		t.Error("no flux resources should not open a group view")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "no flux resources found") {
+		t.Error("should notice that no flux resources exist")
+	}
+}

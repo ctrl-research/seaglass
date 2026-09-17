@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/duration"
 	k8sjson "k8s.io/apimachinery/pkg/util/json"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -235,4 +236,29 @@ func splitDot(p string) []string {
 		}
 	}
 	return append(out, p[start:])
+}
+
+// ReadyCondition returns a Ready condition's status and message. status is
+// "" when there is no Ready condition.
+func ReadyCondition(u *unstructured.Unstructured) (status, message string) {
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		m, ok := c.(map[string]any)
+		if !ok || m["type"] != "Ready" {
+			continue
+		}
+		status, _ = m["status"].(string)
+		message, _ = m["message"].(string)
+		return status, message
+	}
+	return "", ""
+}
+
+// AgeString returns a human age from an object's creationTimestamp.
+func AgeString(u *unstructured.Unstructured, now time.Time) string {
+	ts := u.GetCreationTimestamp()
+	if ts.IsZero() {
+		return ""
+	}
+	return duration.HumanDuration(now.Sub(ts.Time))
 }
