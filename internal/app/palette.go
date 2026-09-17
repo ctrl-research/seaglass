@@ -93,6 +93,10 @@ type palette struct {
 	matches []int
 	cursor  int
 	width   int
+	// hasContexts is true when the current item set contains contexts, which
+	// are gated behind a "ctx"/"cluster" prefix so a filter never switches
+	// clusters by accident.
+	hasContexts bool
 }
 
 const palettePlaceholder = "resource, namespace, or context"
@@ -132,7 +136,7 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 		items = append(items, paletteItem{Kind: itemNamespace, Label: ns, Detail: "namespace", Name: ns, search: strings.ToLower("ns namespace " + ns)})
 	}
 	for _, c := range contexts {
-		items = append(items, paletteItem{Kind: itemContext, Label: c, Detail: "context", Name: c, search: strings.ToLower("ctx context " + c)})
+		items = append(items, paletteItem{Kind: itemContext, Label: c, Detail: "context · switch cluster", Name: c, search: strings.ToLower("ctx cluster context " + c)})
 	}
 	items = append(items,
 		paletteItem{Kind: itemAction, Label: "events", Detail: "cluster events, newest first, warnings highlighted", Name: actionEvents, search: "events warnings ev"},
@@ -163,8 +167,12 @@ func (p *palette) setItems(items []paletteItem) {
 func (p *palette) use(items []paletteItem) {
 	p.items = items
 	p.search = make([]string, len(items))
+	p.hasContexts = false
 	for i, it := range items {
 		p.search[i] = it.search
+		if it.Kind == itemContext {
+			p.hasContexts = true
+		}
 	}
 	p.filter()
 }
@@ -218,9 +226,30 @@ func sortItems(cols []k8s.Column, current int) []paletteItem {
 	return items
 }
 
-// filter recomputes matches, ranked by score then original order.
+// filter recomputes matches, ranked by score then original order. Contexts
+// only appear when the query begins with "ctx" or "cluster"; otherwise they
+// are hidden so a resource/namespace filter can never select one.
 func (p *palette) filter() {
-	idx, scores := fuzzyFilter(p.input.Value(), p.search)
+	q := strings.ToLower(strings.TrimSpace(p.input.Value()))
+	contextMode := false
+	if p.hasContexts {
+		if rest, ok := stripKeyword(q, "ctx", "cluster", "context"); ok {
+			contextMode = true
+			q = rest
+		}
+	}
+	idx, scores := fuzzyFilter(q, p.search)
+	if p.hasContexts {
+		filtered := idx[:0]
+		for _, i := range idx {
+			isCtx := p.items[i].Kind == itemContext
+			if contextMode != isCtx {
+				continue
+			}
+			filtered = append(filtered, i)
+		}
+		idx = filtered
+	}
 	p.matches = idx
 	if scores != nil {
 		sort.SliceStable(p.matches, func(i, j int) bool {
@@ -228,6 +257,21 @@ func (p *palette) filter() {
 		})
 	}
 	p.clampCursor()
+}
+
+// stripKeyword returns the remainder of q after a leading keyword (as a
+// whole first word), and whether one was present. "ctx", "ctx ", and
+// "ctx prod" all match; "context-name" does not.
+func stripKeyword(q string, keywords ...string) (string, bool) {
+	for _, kw := range keywords {
+		if q == kw {
+			return "", true
+		}
+		if strings.HasPrefix(q, kw+" ") {
+			return strings.TrimSpace(q[len(kw):]), true
+		}
+	}
+	return q, false
 }
 
 func (p *palette) clampCursor() {

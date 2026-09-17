@@ -557,6 +557,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "y", "Y":
 			d := m.confirm
 			m.confirm = nil
+			if d.connecting != "" {
+				m.connecting = d.connecting
+			}
 			return m, d.run(d.force)
 		case "f", "F":
 			if m.confirm.hasForce {
@@ -1012,14 +1015,30 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 		if m.client != nil && it.Name == m.client.Context {
 			return nil
 		}
-		m.connecting = it.Name
-		name := it.Name
-		return func() tea.Msg {
-			c, err := k8s.New(name, "")
-			return clientMsg{client: c, err: err}
-		}
+		// Switching clusters is disruptive: confirm first.
+		m.confirm = m.switchClusterConfirm(it.Name)
+		return nil
 	}
 	return nil
+}
+
+// switchClusterConfirm builds a confirmation for changing kube context.
+func (m *Model) switchClusterConfirm(name string) *confirmDialog {
+	from := "(none)"
+	if m.client != nil {
+		from = m.client.Context
+	}
+	return &confirmDialog{
+		title:      "switch cluster?",
+		detail:     from + "  →  " + name,
+		connecting: name,
+		run: func(bool) tea.Cmd {
+			return func() tea.Msg {
+				c, err := k8s.New(name, "")
+				return clientMsg{client: c, err: err}
+			}
+		},
+	}
 }
 
 // startTop sizes and starts the top view.

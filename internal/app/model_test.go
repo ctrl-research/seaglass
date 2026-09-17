@@ -2609,3 +2609,76 @@ func TestBadgeNoMatchNoFullObjects(t *testing.T) {
 		t.Error("a non-matching badge should not force full objects on pods")
 	}
 }
+
+func TestContextsGatedBehindPrefix(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	// A plain filter that happens to match a context name must NOT surface it.
+	m = typeStr(m, "other")
+	for _, it := range m.palette.matches {
+		if m.palette.items[it].Kind == itemContext {
+			t.Fatal("a plain filter should not surface contexts")
+		}
+	}
+	// Clear and use the ctx prefix.
+	for range "other" {
+		mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+		m = mm.(Model)
+	}
+	m = typeStr(m, "ctx other")
+	it, ok := m.palette.selected()
+	if !ok || it.Kind != itemContext || it.Name != "other-ctx" {
+		t.Fatalf("'ctx other' should select the context, got %+v", it)
+	}
+	// Only contexts show in ctx mode.
+	for _, idx := range m.palette.matches {
+		if m.palette.items[idx].Kind != itemContext {
+			t.Error("ctx mode should show only contexts")
+		}
+	}
+	// "cluster" is an alias.
+	for range "ctx other" {
+		mm, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+		m = mm.(Model)
+	}
+	m = typeStr(m, "cluster other")
+	if it, ok := m.palette.selected(); !ok || it.Name != "other-ctx" {
+		t.Errorf("'cluster' alias should select the context, got %+v", it)
+	}
+}
+
+func TestContextSwitchConfirms(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	m = typeStr(m, "ctx other")
+	m, cmd := press(m, "enter")
+	// Choosing a context should not switch immediately; it confirms.
+	if cmd != nil {
+		t.Fatal("choosing a context should not run a command before confirming")
+	}
+	if m.confirm == nil {
+		t.Fatal("switching clusters should ask for confirmation")
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "switch cluster?") || !strings.Contains(out, "other-ctx") {
+		t.Errorf("confirm dialog missing:\n%s", out)
+	}
+	// n aborts.
+	m, _ = press(m, "n")
+	if m.confirm != nil || m.connecting != "" {
+		t.Fatal("n should cancel the switch")
+	}
+	// y switches (and shows the connecting note).
+	m, _ = press(m, ":")
+	m = typeStr(m, "ctx other")
+	m, _ = press(m, "enter")
+	m, cmd = press(m, "y")
+	if cmd == nil {
+		t.Fatal("y should run the switch")
+	}
+	if m.connecting != "other-ctx" {
+		t.Errorf("connecting note = %q", m.connecting)
+	}
+}
