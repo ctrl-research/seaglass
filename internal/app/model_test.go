@@ -2897,3 +2897,39 @@ func TestGroupViewEmpty(t *testing.T) {
 		t.Error("should notice that no flux resources exist")
 	}
 }
+
+func TestGroupSurvivesNamespaceChange(t *testing.T) {
+	m, _, _ := newTestWithRules(t, config.Ruleset{Groups: []config.GroupRule{
+		{Name: "flux", Match: config.Match{Group: "*.toolkit.fluxcd.io"}},
+	}})
+	ks := k8s.Resource{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", Namespaced: true}
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{k8s.Pods, ks, k8s.Namespaces}})
+	m = mm.(Model)
+	mm, _ = m.Update(namespacesMsg{names: []string{"flux-system", "default"}})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	// Open the flux group.
+	m, _ = press(m, ":")
+	m = typeStr(m, "flux")
+	m, _ = press(m, "enter")
+	if _, ok := m.top().(*groupView); !ok {
+		t.Fatalf("expected a group view, got %T", m.top())
+	}
+	// Switch namespace to all; the top view must still be the flux group,
+	// re-scoped, not a pods table.
+	m, _ = press(m, ":")
+	m = typeStr(m, "ns all")
+	m, _ = press(m, "enter")
+	gv, ok := m.top().(*groupView)
+	if !ok {
+		t.Fatalf("group view should survive a namespace change, got %T", m.top())
+	}
+	if gv.ns != "" {
+		t.Errorf("group should be re-scoped to all namespaces, ns=%q", gv.ns)
+	}
+	// Its member stream should have been (re)started for the new scope.
+	fs := m.deps.stream.(*fakeStreamer)
+	if last := fs.calls[len(fs.calls)-1]; last != "kustomizations/" {
+		t.Errorf("group member should stream cluster-wide after ns=all, got %q", last)
+	}
+}

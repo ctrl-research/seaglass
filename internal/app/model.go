@@ -1099,22 +1099,31 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 	return nil
 }
 
-// openGroupByName resolves a config group's members against discovery and
-// opens the merged view.
-func (m *Model) openGroupByName(name string) tea.Cmd {
+// membersForGroup resolves a config group's members against discovery.
+// ok is false when there is no such group.
+func (m *Model) membersForGroup(name string) (members []k8s.Resource, ok bool) {
 	for _, g := range m.configGroups {
 		if g.Name != name {
 			continue
 		}
-		var members []k8s.Resource
 		for _, r := range m.resources {
 			if g.MemberMatch(r.GVR.Group, r.GVR.Resource, r.Kind) {
 				members = append(members, r)
 			}
 		}
-		return m.openGroup(name, members)
+		return members, true
 	}
-	return m.setNotice("no group named " + name)
+	return nil, false
+}
+
+// openGroupByName resolves a config group's members against discovery and
+// opens the merged view.
+func (m *Model) openGroupByName(name string) tea.Cmd {
+	members, ok := m.membersForGroup(name)
+	if !ok {
+		return m.setNotice("no group named " + name)
+	}
+	return m.openGroup(name, members)
 }
 
 // openGroup pushes a merged group view for the given members.
@@ -1187,12 +1196,27 @@ func (m *Model) setNamespace(ns string) tea.Cmd {
 	if ns == m.namespace {
 		return nil
 	}
+	// Preserve a group view across the change: re-scope it to the new
+	// namespace rather than falling back to the base resource table.
+	groupName := ""
+	if gv, ok := m.top().(*groupView); ok {
+		groupName = gv.title
+	}
 	m.namespace = ns
 	res := m.currentResource()
 	for _, v := range m.stack {
 		v.stop()
 	}
 	m.stack = nil
+	if groupName != "" {
+		if members, ok := m.membersForGroup(groupName); ok && len(members) > 0 {
+			m.nextID++
+			v := newGroupView(m.nextID, groupName, members, m.namespace)
+			v.setNamespace(m.namespace)
+			m.stack = append(m.stack, v)
+			return m.startTop()
+		}
+	}
 	m.pushResource(res)
 	return m.startTop()
 }
