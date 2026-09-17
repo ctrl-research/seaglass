@@ -87,13 +87,14 @@ type Model struct {
 	version       string // seaglass version
 	serverVersion string // fetched from /version
 
-	state         stateStore
-	lastSaved     string // fingerprint of the last persisted position
-	saveDir       string
-	configActions []action
-	configJumps   []config.JumpRule
-	configBadges  []config.BadgeRule
-	configGroups  []config.GroupRule
+	state          stateStore
+	lastSaved      string // fingerprint of the last persisted position
+	saveDir        string
+	configActions  []action
+	configJumps    []config.JumpRule
+	configBadges   []config.BadgeRule
+	configGroups   []config.GroupRule
+	configCommands []config.CommandRule
 
 	width, height int
 }
@@ -134,19 +135,20 @@ type (
 // New builds the root model. Streaming starts in Init.
 func New(opts Options) Model {
 	m := Model{
-		client:        opts.Client,
-		deps:          deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger, exec: opts.execer, edit: opts.editer, fwd: opts.forwarder},
-		saveDir:       opts.SaveDir,
-		namespace:     opts.Namespace,
-		palette:       newPalette(),
-		prompt:        newPrompt(),
-		contexts:      opts.contexts,
-		version:       opts.Version,
-		state:         opts.State,
-		configActions: configActionsFromRules(opts.Ruleset.Actions),
-		configJumps:   opts.Ruleset.Jumps,
-		configBadges:  opts.Ruleset.Badges,
-		configGroups:  opts.Ruleset.Groups,
+		client:         opts.Client,
+		deps:           deps{stream: opts.streamer, get: opts.getter, patch: opts.patcher, logs: opts.logger, exec: opts.execer, edit: opts.editer, fwd: opts.forwarder},
+		saveDir:        opts.SaveDir,
+		namespace:      opts.Namespace,
+		palette:        newPalette(),
+		prompt:         newPrompt(),
+		contexts:       opts.contexts,
+		version:        opts.Version,
+		state:          opts.State,
+		configActions:  configActionsFromRules(opts.Ruleset.Actions),
+		configJumps:    opts.Ruleset.Jumps,
+		configBadges:   opts.Ruleset.Badges,
+		configGroups:   opts.Ruleset.Groups,
+		configCommands: opts.Ruleset.Commands,
 	}
 	if m.deps.stream == nil && opts.Client != nil {
 		m.deps.stream = clientStreamer{opts.Client}
@@ -422,6 +424,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case relatedMsg:
 		return m.handleRelated(msg)
 
+	case commandDoneMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		return m, m.setNotice("ran command " + msg.name)
+
 	case groupUpdateMsg:
 		if gv, ok := m.top().(*groupView); ok && gv.id == msg.id {
 			return m, gv.handle(msg)
@@ -664,6 +673,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		for _, a := range actionsFor(rv.res, m.configActions) {
 			if is(msg, a.Key) {
 				return m, m.trigger(a, rv)
+			}
+		}
+		for _, c := range commandsFor(rv.res, m.configCommands) {
+			if c.Key != "" && is(msg, bind(c.Key, c.Name, c.Key)) {
+				return m, m.triggerCommand(c, rv)
 			}
 		}
 		switch {
@@ -955,6 +969,37 @@ func (m *Model) openRollout(tgt target) tea.Cmd {
 	return v.start(m.deps)
 }
 
+// triggerCommand runs a config command on the table's selected row, via a
+// confirm dialog when the command asks for one.
+func (m *Model) triggerCommand(c config.CommandRule, rv *resourceView) tea.Cmd {
+	row, ok := rv.selectedRow()
+	if !ok {
+		return nil
+	}
+	ns := row.Namespace
+	if ns == "" {
+		ns = rv.namespace
+	}
+	tgt := target{res: rv.res, namespace: ns, name: row.Name}
+	ctx := ""
+	if m.client != nil {
+		ctx = m.client.Context
+	}
+	if c.Confirm {
+		desc := c.Desc
+		if desc == "" {
+			desc = strings.Join(c.Command, " ")
+		}
+		m.confirm = &confirmDialog{
+			title:  "run " + c.Name + "?",
+			detail: tgt.String() + "  ·  " + desc,
+			run:    func(bool) tea.Cmd { return runCommand(c, tgt, ctx) },
+		}
+		return nil
+	}
+	return runCommand(c, tgt, ctx)
+}
+
 // setNotice shows a transient success message for a few seconds.
 func (m *Model) setNotice(text string) tea.Cmd {
 	m.notice = text
@@ -972,6 +1017,7 @@ func (m *Model) openPalette() tea.Cmd {
 		if rv, ok := m.top().(*resourceView); ok {
 			if row, ok := rv.selectedRow(); ok {
 				extra = actionItems(rv.res, row, m.configActions)
+				extra = append(extra, commandItems(rv.res, row, m.configCommands)...)
 			}
 		}
 	}
@@ -999,6 +1045,9 @@ func (m Model) helpSections() []ui.HelpSection {
 				bs = append(bs, a.Key)
 			}
 			secs = append(secs, helpSection{"Actions on " + rv.res.Kind, bs})
+		}
+		if cmds := commandHelp(rv.res, m.configCommands); len(cmds) > 0 {
+			secs = append(secs, helpSection{"Commands on " + rv.res.Kind, cmds})
 		}
 	}
 	secs = append(secs, paletteHelp())
@@ -1068,6 +1117,13 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 				if a, found := actionByName(name, m.configActions); found {
 					if rv, isTable := m.top().(*resourceView); isTable {
 						return m.trigger(a, rv)
+					}
+				}
+			}
+			if name, ok := strings.CutPrefix(it.Name, "cmd:"); ok {
+				if c, found := commandByName(name, m.configCommands); found {
+					if rv, isTable := m.top().(*resourceView); isTable {
+						return m.triggerCommand(c, rv)
 					}
 				}
 			}
