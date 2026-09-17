@@ -1,0 +1,9 @@
+# Core groups that ship with seaglass and need no operator.
+groups:
+  - name: workloads
+    desc: deployments, statefulsets, daemonsets, jobs together
+    kinds:
+      - {group: apps, resource: deployments}
+      - {group: apps, resource: statefulsets}
+      - {group: apps, resource: daemonsets}
+      - {group: batch, resource: jobs}

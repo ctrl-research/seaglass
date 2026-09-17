@@ -154,8 +154,8 @@ func runPresets(args []string) error {
 			return err
 		}
 		for _, p := range presets {
-			fmt.Printf("%-10s  %d actions, %d jumps, %d badges, %d commands\n",
-				p.Name, len(p.Rules.Actions), len(p.Rules.Jumps), len(p.Rules.Badges), len(p.Rules.Commands))
+			fmt.Printf("%-10s  %d actions, %d jumps, %d badges, %d commands, %d groups\n",
+				p.Name, len(p.Rules.Actions), len(p.Rules.Jumps), len(p.Rules.Badges), len(p.Rules.Commands), len(p.Rules.Groups))
 		}
 		return nil
 	case "show":

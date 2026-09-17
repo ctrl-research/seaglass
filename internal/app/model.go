@@ -93,6 +93,7 @@ type Model struct {
 	configActions []action
 	configJumps   []config.JumpRule
 	configBadges  []config.BadgeRule
+	configGroups  []config.GroupRule
 
 	width, height int
 }
@@ -145,6 +146,7 @@ func New(opts Options) Model {
 		configActions: configActionsFromRules(opts.Ruleset.Actions),
 		configJumps:   opts.Ruleset.Jumps,
 		configBadges:  opts.Ruleset.Badges,
+		configGroups:  opts.Ruleset.Groups,
 	}
 	if m.deps.stream == nil && opts.Client != nil {
 		m.deps.stream = clientStreamer{opts.Client}
@@ -303,7 +305,7 @@ func (m Model) bodyHeight() int {
 }
 
 func (m *Model) rebuildPalette() {
-	m.palette.setItems(buildItems(m.resources, m.namespaces, m.contexts))
+	m.palette.setItems(buildItems(m.resources, m.namespaces, m.contexts, m.configGroups))
 }
 
 // Update handles messages, then persists the position if it changed.
@@ -419,6 +421,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case relatedMsg:
 		return m.handleRelated(msg)
+
+	case groupUpdateMsg:
+		if gv, ok := m.top().(*groupView); ok && gv.id == msg.id {
+			return m, gv.handle(msg)
+		}
+		return m, nil
 
 	case rolloutStatusMsg:
 		if rv, ok := m.top().(*rolloutView); ok && rv.id == msg.id {
@@ -826,6 +834,21 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.computeRelated(ov.res, ov.namespace, ov.name, ov.obj)
 		}
 	}
+	if gv, ok := top.(*groupView); ok {
+		switch {
+		case is(msg, keys.Detail), is(msg, keys.YAML), is(msg, keys.Accept):
+			if row, ok := gv.selectedRow(); ok {
+				mode := modeDetail
+				if is(msg, keys.YAML) {
+					mode = modeYAML
+				}
+				gv.stop()
+				m.pushObject(row.res, row.namespace, row.name, mode)
+				return m, m.startTop()
+			}
+			return m, nil
+		}
+	}
 	if cv, ok := top.(*contextsView); ok {
 		if is(msg, keys.Accept) {
 			if ci, ok := cv.selected(); ok {
@@ -1038,6 +1061,9 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 		case actionContexts:
 			m.openContexts()
 		default:
+			if name, ok := strings.CutPrefix(it.Name, "group:"); ok {
+				return m.openGroupByName(name)
+			}
 			if name, ok := strings.CutPrefix(it.Name, "act:"); ok {
 				if a, found := actionByName(name, m.configActions); found {
 					if rv, isTable := m.top().(*resourceView); isTable {
@@ -1071,6 +1097,46 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 		return nil
 	}
 	return nil
+}
+
+// membersForGroup resolves a config group's members against discovery.
+// ok is false when there is no such group.
+func (m *Model) membersForGroup(name string) (members []k8s.Resource, ok bool) {
+	for _, g := range m.configGroups {
+		if g.Name != name {
+			continue
+		}
+		for _, r := range m.resources {
+			if g.MemberMatch(r.GVR.Group, r.GVR.Resource, r.Kind) {
+				members = append(members, r)
+			}
+		}
+		return members, true
+	}
+	return nil, false
+}
+
+// openGroupByName resolves a config group's members against discovery and
+// opens the merged view.
+func (m *Model) openGroupByName(name string) tea.Cmd {
+	members, ok := m.membersForGroup(name)
+	if !ok {
+		return m.setNotice("no group named " + name)
+	}
+	return m.openGroup(name, members)
+}
+
+// openGroup pushes a merged group view for the given members.
+func (m *Model) openGroup(title string, members []k8s.Resource) tea.Cmd {
+	if len(members) == 0 {
+		return m.setNotice("no " + title + " resources found in this cluster")
+	}
+	m.top().stop()
+	m.nextID++
+	v := newGroupView(m.nextID, title, members, m.namespace)
+	v.setNamespace(m.namespace)
+	m.stack = append(m.stack, v)
+	return m.startTop()
 }
 
 // openContexts pushes the contexts table.
@@ -1130,12 +1196,27 @@ func (m *Model) setNamespace(ns string) tea.Cmd {
 	if ns == m.namespace {
 		return nil
 	}
+	// Preserve a group view across the change: re-scope it to the new
+	// namespace rather than falling back to the base resource table.
+	groupName := ""
+	if gv, ok := m.top().(*groupView); ok {
+		groupName = gv.title
+	}
 	m.namespace = ns
 	res := m.currentResource()
 	for _, v := range m.stack {
 		v.stop()
 	}
 	m.stack = nil
+	if groupName != "" {
+		if members, ok := m.membersForGroup(groupName); ok && len(members) > 0 {
+			m.nextID++
+			v := newGroupView(m.nextID, groupName, members, m.namespace)
+			v.setNamespace(m.namespace)
+			m.stack = append(m.stack, v)
+			return m.startTop()
+		}
+	}
 	m.pushResource(res)
 	return m.startTop()
 }

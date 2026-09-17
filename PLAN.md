@@ -227,6 +227,8 @@ Config types:
   detail view and under a related-objects key.
 - **badges**: match plus a condition or field predicate, mapped to a row
   style (warning, error, muted) and an optional short tag.
+- **groups**: a named merged table across several kinds, selected by a match
+  glob or an explicit kinds list; opened from the palette.
 - **commands**: the escape hatch. Run a program with the selected object's
   fields in the environment via `tea.ExecProcess`. Clearly labeled as the
   unsafe path; no argument templating beyond env vars.
@@ -262,9 +264,12 @@ Work items:
   `lastAppliedRevision`, `lastAttemptedRevision`, `spec.dependsOn` with
   each dependency's Ready state at the top of Kustomization and
   HelmRelease detail.
-- [ ] Generic resource-group view: one table merging several streams with
-  a KIND column, not-ready first. Used by the `flux` group and a
-  `workloads` group (Deployments, StatefulSets, DaemonSets, Jobs).
+- [x] Generic resource-group view: one table merging several streams with
+  a KIND column (plus NAMESPACE/NAME/READY/STATUS/AGE from each object's
+  Ready condition), not-ready first. Groups are a config type: the flux
+  preset declares the `flux` group (match *.toolkit.fluxcd.io) and a core
+  preset the `workloads` group; users add their own. Enter opens the
+  selected object's detail.
 - [x] Fixtures: `make demo-flux` (hack/demo-flux.sh) installs Flux on the
   kind cluster and applies a working (podinfo) and a deliberately broken
   Kustomization, idempotently. Used to exercise the preset against real

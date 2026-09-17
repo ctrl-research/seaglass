@@ -73,7 +73,9 @@ kustomizations, `po` → pods) via the API server's own shortNames, and an
 exact short name always ranks first. Contexts are never mixed into a plain
 filter: the palette's `clusters` entry opens a table of all contexts, and
 `ctx <name>` switches directly; either way a switch asks for confirmation. The
-palette also has `quit` (also `exit` or `:q`) and `help` actions, an `events` cluster stream, and lists
+palette also has `flux` and `workloads` group views (one table across
+several kinds, not-ready first), a `clusters` context table, `events`,
+`quit`, and `help` actions, and lists
 the actions available for the selected row at the top. Choosing a resource pushes a new view;
 choosing a namespace keeps the current resource and resets the view stack;
 choosing a context reconnects.
@@ -95,8 +97,9 @@ hack/drive.exp 120 30 /tmp/out.raw --context kind-seaglass-dev -A -- ":" "deploy
 
 ## Operator presets (M4, in progress)
 
-seaglass ships declarative operator rules (actions, jumps, badges, commands)
-as embedded presets, starting with Flux. Users add or override rules in
+seaglass ships declarative operator rules (actions, jumps, badges, commands,
+and resource groups) as embedded presets, starting with Flux (and a small
+core preset for the workloads group). Users add or override rules in
 `$XDG_CONFIG_HOME/seaglass/seaglass.yaml`; `disablePresets: [flux]` turns one
 off. Inspect them with:
 

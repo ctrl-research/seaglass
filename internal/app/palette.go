@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/ctrl-research/seaglass/internal/config"
 	"github.com/ctrl-research/seaglass/internal/k8s"
 )
 
@@ -130,7 +131,7 @@ func newPalette() palette {
 }
 
 // buildItems assembles palette entries from cluster state.
-func buildItems(resources []k8s.Resource, namespaces, contexts []string) []paletteItem {
+func buildItems(resources []k8s.Resource, namespaces, contexts []string, groups []config.GroupRule) []paletteItem {
 	items := make([]paletteItem, 0, len(resources)+len(namespaces)+len(contexts))
 	for _, r := range resources {
 		detail := r.GroupVersion()
@@ -150,12 +151,15 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 	for _, c := range contexts {
 		items = append(items, paletteItem{Kind: itemContext, Label: c, Detail: "context · switch cluster", Name: c, search: strings.ToLower("ctx cluster context " + c)})
 	}
+	for _, g := range groups {
+		items = append(items, paletteItem{Kind: itemAction, Label: g.Name, Detail: g.Desc, Name: "group:" + g.Name, search: strings.ToLower(g.Name + " " + g.Desc + " group"), exact: []string{strings.ToLower(g.Name)}})
+	}
 	items = append(items,
-		paletteItem{Kind: itemAction, Label: "clusters", Detail: "switch context · a table of all clusters", Name: actionContexts, search: "clusters cluster ctx context switch"},
-		paletteItem{Kind: itemAction, Label: "events", Detail: "cluster events, newest first, warnings highlighted", Name: actionEvents, search: "events warnings ev"},
-		paletteItem{Kind: itemAction, Label: "port-forwards", Detail: "list and cancel active port-forwards", Name: actionForwards, search: "port forwards proxy tunnel"},
-		paletteItem{Kind: itemAction, Label: "help", Detail: "show every key for this view", Name: actionHelp, search: "help keys ?"},
-		paletteItem{Kind: itemAction, Label: "quit", Detail: "exit seaglass", Name: actionQuit, search: "quit exit q :q"},
+		paletteItem{Kind: itemAction, Label: "clusters", Detail: "switch context · a table of all clusters", Name: actionContexts, search: "clusters cluster ctx context switch", exact: []string{"clusters", "cluster"}},
+		paletteItem{Kind: itemAction, Label: "events", Detail: "cluster events, newest first, warnings highlighted", Name: actionEvents, search: "events warnings ev", exact: []string{"events"}},
+		paletteItem{Kind: itemAction, Label: "port-forwards", Detail: "list and cancel active port-forwards", Name: actionForwards, search: "port forwards proxy tunnel", exact: []string{"port-forwards", "forwards"}},
+		paletteItem{Kind: itemAction, Label: "help", Detail: "show every key for this view", Name: actionHelp, search: "help keys ?", exact: []string{"help"}},
+		paletteItem{Kind: itemAction, Label: "quit", Detail: "exit seaglass", Name: actionQuit, search: "quit exit q :q", exact: []string{"quit", "exit"}},
 	)
 	return items
 }

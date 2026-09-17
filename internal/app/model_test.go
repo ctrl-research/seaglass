@@ -2826,3 +2826,110 @@ func TestActionsToggle(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupViewMergesAndSorts(t *testing.T) {
+	m, _, _ := newTestWithRules(t, config.Ruleset{Groups: []config.GroupRule{
+		{Name: "flux", Match: config.Match{Group: "*.toolkit.fluxcd.io"}},
+	}})
+	// Discovery with two flux kinds.
+	ks := k8s.Resource{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", Namespaced: true}
+	gr := k8s.Resource{GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}, Kind: "GitRepository", Namespaced: true}
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{k8s.Pods, ks, gr}})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	m = typeStr(m, "flux")
+	it, ok := m.palette.selected()
+	if !ok || it.Name != "group:flux" {
+		t.Fatalf("flux group action not first, got %+v", it)
+	}
+	m, _ = press(m, "enter")
+	gv, ok := m.top().(*groupView)
+	if !ok || len(gv.members) != 2 {
+		t.Fatalf("flux group should have 2 members, got %T %+v", m.top(), m.top())
+	}
+	// Feed member snapshots with full objects (Ready conditions).
+	ready := func(name, status string) k8s.Row {
+		return k8s.Row{Name: name, Namespace: "flux-system", UID: name, Cells: []string{name},
+			Object: &unstructured.Unstructured{Object: map[string]any{
+				"metadata": map[string]any{"name": name, "namespace": "flux-system"},
+				"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": status, "message": status + " msg"}}},
+			}}}
+	}
+	mm, _ = m.Update(groupUpdateMsg{id: gv.id, member: 0, snap: k8s.Snapshot{Rows: []k8s.Row{ready("apps", "True"), ready("broken", "False")}}})
+	m = mm.(Model)
+	mm, _ = m.Update(groupUpdateMsg{id: gv.id, member: 1, snap: k8s.Snapshot{Rows: []k8s.Row{ready("repo", "True")}}})
+	m = mm.(Model)
+	out := stripANSI(m.View().Content)
+	for _, want := range []string{"KIND", "Kustomization", "GitRepository", "apps", "broken", "repo", "1 not ready · 3 objects"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("group view missing %q:\n%s", want, out)
+		}
+	}
+	// The not-ready row (broken) sorts to the top.
+	gv = m.top().(*groupView)
+	if gv.rows[0].name != "broken" {
+		t.Errorf("not-ready row should sort first, got %q", gv.rows[0].name)
+	}
+	// enter opens that object's detail with the right resource.
+	m, _ = press(m, "enter")
+	ov, ok := m.top().(*objectView)
+	if !ok || ov.res.Kind != "Kustomization" || ov.name != "broken" {
+		t.Fatalf("enter should open the selected object, got %T %+v", m.top(), m.top())
+	}
+}
+
+func TestGroupViewEmpty(t *testing.T) {
+	m, _, _ := newTestWithRules(t, config.Ruleset{Groups: []config.GroupRule{
+		{Name: "flux", Match: config.Match{Group: "*.toolkit.fluxcd.io"}},
+	}})
+	// No flux resources discovered.
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{k8s.Pods}})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	m = typeStr(m, "flux")
+	m, _ = press(m, "enter")
+	if _, ok := m.top().(*groupView); ok {
+		t.Error("no flux resources should not open a group view")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "no flux resources found") {
+		t.Error("should notice that no flux resources exist")
+	}
+}
+
+func TestGroupSurvivesNamespaceChange(t *testing.T) {
+	m, _, _ := newTestWithRules(t, config.Ruleset{Groups: []config.GroupRule{
+		{Name: "flux", Match: config.Match{Group: "*.toolkit.fluxcd.io"}},
+	}})
+	ks := k8s.Resource{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", Namespaced: true}
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{k8s.Pods, ks, k8s.Namespaces}})
+	m = mm.(Model)
+	mm, _ = m.Update(namespacesMsg{names: []string{"flux-system", "default"}})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	// Open the flux group.
+	m, _ = press(m, ":")
+	m = typeStr(m, "flux")
+	m, _ = press(m, "enter")
+	if _, ok := m.top().(*groupView); !ok {
+		t.Fatalf("expected a group view, got %T", m.top())
+	}
+	// Switch namespace to all; the top view must still be the flux group,
+	// re-scoped, not a pods table.
+	m, _ = press(m, ":")
+	m = typeStr(m, "ns all")
+	m, _ = press(m, "enter")
+	gv, ok := m.top().(*groupView)
+	if !ok {
+		t.Fatalf("group view should survive a namespace change, got %T", m.top())
+	}
+	if gv.ns != "" {
+		t.Errorf("group should be re-scoped to all namespaces, ns=%q", gv.ns)
+	}
+	// Its member stream should have been (re)started for the new scope.
+	fs := m.deps.stream.(*fakeStreamer)
+	if last := fs.calls[len(fs.calls)-1]; last != "kustomizations/" {
+		t.Errorf("group member should stream cluster-wide after ns=all, got %q", last)
+	}
+}
