@@ -64,10 +64,11 @@ ImagePullBackOff red. An object's detail view shows per-container state,
 restart counts, and problem reasons.
 
 Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
-`ns all` returns to all namespaces. Contexts are hidden from a plain filter
-and only appear with a `ctx` or `cluster` prefix (`ctx prod`), and switching
-clusters asks for confirmation, so a filter never changes clusters by
-accident. The
+`ns all` returns to all namespaces. Resource short names work (`ks` →
+kustomizations, `po` → pods) via the API server's own shortNames, and an
+exact short name always ranks first. Contexts are never mixed into a plain
+filter: the palette's `clusters` entry opens a table of all contexts, and
+`ctx <name>` switches directly; either way a switch asks for confirmation. The
 palette also has `quit` (also `exit` or `:q`) and `help` actions, an `events` cluster stream, and lists
 the actions available for the selected row at the top. Choosing a resource pushes a new view;
 choosing a namespace keeps the current resource and resets the view stack;

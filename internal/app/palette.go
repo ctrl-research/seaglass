@@ -64,6 +64,7 @@ const (
 	actionHelp     = "help"
 	actionForwards = "forwards"
 	actionEvents   = "events"
+	actionContexts = "clusters"
 )
 
 // paletteItem is one selectable entry.
@@ -77,6 +78,7 @@ type paletteItem struct {
 	Since    time.Duration
 	Text     string // clipboard text when Kind == itemCopy
 	search   string
+	exact    []string // lowercased aliases that, matched exactly, rank first
 }
 
 // paletteMaxVisible caps the dropdown height.
@@ -127,7 +129,8 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 			detail = strings.Join(r.ShortNames, ",") + " · " + detail
 		}
 		search := strings.ToLower(strings.Join(append([]string{r.Name(), r.Kind, r.GroupVersion()}, r.ShortNames...), " "))
-		items = append(items, paletteItem{Kind: itemResource, Label: r.Name(), Detail: detail, Resource: r, search: search})
+		exact := append([]string{strings.ToLower(r.Name()), strings.ToLower(r.Kind)}, lowerAll(r.ShortNames)...)
+		items = append(items, paletteItem{Kind: itemResource, Label: r.Name(), Detail: detail, Resource: r, search: search, exact: exact})
 	}
 	if len(namespaces) > 0 {
 		items = append(items, paletteItem{Kind: itemNamespace, Label: "all namespaces", Detail: "namespace · every namespace at once", Name: "", search: "ns namespace all -a"})
@@ -139,6 +142,7 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 		items = append(items, paletteItem{Kind: itemContext, Label: c, Detail: "context · switch cluster", Name: c, search: strings.ToLower("ctx cluster context " + c)})
 	}
 	items = append(items,
+		paletteItem{Kind: itemAction, Label: "clusters", Detail: "switch context · a table of all clusters", Name: actionContexts, search: "clusters cluster ctx context switch"},
 		paletteItem{Kind: itemAction, Label: "events", Detail: "cluster events, newest first, warnings highlighted", Name: actionEvents, search: "events warnings ev"},
 		paletteItem{Kind: itemAction, Label: "port-forwards", Detail: "list and cancel active port-forwards", Name: actionForwards, search: "port forwards proxy tunnel"},
 		paletteItem{Kind: itemAction, Label: "help", Detail: "show every key for this view", Name: actionHelp, search: "help keys ?"},
@@ -233,12 +237,26 @@ func (p *palette) filter() {
 	q := strings.ToLower(strings.TrimSpace(p.input.Value()))
 	contextMode := false
 	if p.hasContexts {
-		if rest, ok := stripKeyword(q, "ctx", "cluster", "context"); ok {
+		// Only enter inline context mode when a name follows the keyword;
+		// a bare "ctx" leaves the "clusters" entry (which opens the table).
+		if rest, ok := stripKeyword(q, "ctx", "cluster", "context"); ok && rest != "" {
 			contextMode = true
 			q = rest
 		}
 	}
 	idx, scores := fuzzyFilter(q, p.search)
+	// Boost an exact short-name/name match so e.g. "ks" ranks kustomizations
+	// first over incidental fuzzy matches.
+	if q != "" && scores != nil {
+		for _, i := range idx {
+			for _, a := range p.items[i].exact {
+				if a == q {
+					scores[i] += 100000
+					break
+				}
+			}
+		}
+	}
 	if p.hasContexts {
 		filtered := idx[:0]
 		for _, i := range idx {
@@ -451,4 +469,12 @@ func relatedItems(targets []relatedTarget) []paletteItem {
 		items[i] = paletteItem{Kind: itemRelated, Label: t.label, Detail: t.detail, Index: i, search: strings.ToLower(t.label + " " + t.detail)}
 	}
 	return items
+}
+
+func lowerAll(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = strings.ToLower(s)
+	}
+	return out
 }

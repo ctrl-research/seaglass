@@ -64,10 +64,12 @@ type Model struct {
 	stack  []view
 	nextID int
 
-	palette    palette
-	resources  []k8s.Resource
-	namespaces []string
-	contexts   []string
+	palette        palette
+	resources      []k8s.Resource
+	namespaces     []string
+	contexts       []string
+	contextInfos   []k8s.ContextInfo
+	currentContext string
 
 	connecting     string // context name while switching, "" otherwise
 	err            error
@@ -105,8 +107,10 @@ type (
 		err   error
 	}
 	contextsMsg struct {
-		names []string
-		err   error
+		names   []string
+		infos   []k8s.ContextInfo
+		current string
+		err     error
 	}
 	clientMsg struct {
 		client *k8s.Client
@@ -175,8 +179,8 @@ func (m Model) Init() tea.Cmd {
 	cmds = append(cmds, m.discoverCmds()...)
 	if m.contexts == nil {
 		cmds = append(cmds, func() tea.Msg {
-			names, _, err := k8s.ListContexts()
-			return contextsMsg{names: names, err: err}
+			infos, current, err := k8s.ListContextInfos()
+			return contextsMsg{infos: infos, current: current, err: err}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -505,7 +509,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case contextsMsg:
 		if msg.err == nil {
-			m.contexts = msg.names
+			if msg.infos != nil {
+				m.contextInfos = msg.infos
+				m.currentContext = msg.current
+				names := make([]string, len(msg.infos))
+				for i, ci := range msg.infos {
+					names[i] = ci.Name
+				}
+				m.contexts = names
+			} else {
+				m.contexts = msg.names
+			}
 		}
 		m.rebuildPalette()
 		return m, nil
@@ -813,6 +827,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.computeRelated(ov.res, ov.namespace, ov.name, ov.obj)
 		}
 	}
+	if cv, ok := top.(*contextsView); ok {
+		if is(msg, keys.Accept) {
+			if ci, ok := cv.selected(); ok {
+				if m.client != nil && ci.Name == m.client.Context {
+					return m, m.setNotice("already on " + ci.Name)
+				}
+				m.confirm = m.switchClusterConfirm(ci.Name)
+			}
+			return m, nil
+		}
+	}
 	if fv, ok := top.(*forwardsView); ok {
 		switch {
 		case is(msg, keys.Delete), is(msg, keys.Accept):
@@ -986,6 +1011,8 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 			m.openForwards()
 		case actionEvents:
 			return m.openClusterEvents()
+		case actionContexts:
+			m.openContexts()
 		default:
 			if name, ok := strings.CutPrefix(it.Name, "act:"); ok {
 				if a, found := actionByName(name, m.configActions); found {
@@ -1020,6 +1047,24 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 		return nil
 	}
 	return nil
+}
+
+// openContexts pushes the contexts table.
+func (m *Model) openContexts() {
+	infos := m.contextInfos
+	if infos == nil {
+		for _, n := range m.contexts {
+			infos = append(infos, k8s.ContextInfo{Name: n})
+		}
+	}
+	cur := m.currentContext
+	if m.client != nil {
+		cur = m.client.Context
+	}
+	v := newContextsView(infos, cur)
+	m.top().stop()
+	m.stack = append(m.stack, v)
+	v.resize(m.width, m.bodyHeight())
 }
 
 // switchClusterConfirm builds a confirmation for changing kube context.

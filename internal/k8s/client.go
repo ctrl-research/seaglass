@@ -33,17 +33,42 @@ type Client struct {
 
 // ListContexts returns the context names in kubeconfig and the current one.
 func ListContexts() (names []string, current string, err error) {
+	infos, current, err := ListContextInfos()
+	if err != nil {
+		return nil, "", err
+	}
+	for _, ci := range infos {
+		names = append(names, ci.Name)
+	}
+	return names, current, nil
+}
+
+// ContextInfo describes one kubeconfig context for the contexts table.
+type ContextInfo struct {
+	Name      string
+	Cluster   string
+	User      string
+	Namespace string
+}
+
+// ListContextInfos returns every kubeconfig context with its cluster, user,
+// and default namespace, sorted by name, plus the current context.
+func ListContextInfos() (infos []ContextInfo, current string, err error) {
 	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{})
 	raw, err := cc.RawConfig()
 	if err != nil {
 		return nil, "", fmt.Errorf("load kubeconfig: %w", err)
 	}
-	for name := range raw.Contexts {
-		names = append(names, name)
+	for name, c := range raw.Contexts {
+		ns := c.Namespace
+		if ns == "" {
+			ns = "default"
+		}
+		infos = append(infos, ContextInfo{Name: name, Cluster: c.Cluster, User: c.AuthInfo, Namespace: ns})
 	}
-	sort.Strings(names)
-	return names, raw.CurrentContext, nil
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
+	return infos, raw.CurrentContext, nil
 }
 
 // New loads kubeconfig using the standard loading rules ($KUBECONFIG, then

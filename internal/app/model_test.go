@@ -2682,3 +2682,94 @@ func TestContextSwitchConfirms(t *testing.T) {
 		t.Errorf("connecting note = %q", m.connecting)
 	}
 }
+
+func TestClustersActionOpensTable(t *testing.T) {
+	m, _ := newTest(t)
+	mm, _ := m.Update(contextsMsg{infos: []k8s.ContextInfo{
+		{Name: "test-ctx", Cluster: "c1", User: "u1", Namespace: "default"},
+		{Name: "other-ctx", Cluster: "c2", User: "u2", Namespace: "kube-system"},
+	}, current: "test-ctx"})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	// Bare "ctx" should surface the clusters action, not inline contexts.
+	m, _ = press(m, ":")
+	m = typeStr(m, "ctx")
+	it, ok := m.palette.selected()
+	if !ok || it.Kind != itemAction || it.Name != actionContexts {
+		t.Fatalf("bare 'ctx' should surface the clusters action, got %+v", it)
+	}
+	// No inline context items appear for bare "ctx".
+	for _, i := range m.palette.matches {
+		if m.palette.items[i].Kind == itemContext {
+			t.Error("bare 'ctx' must not list individual contexts inline")
+		}
+	}
+	m, _ = press(m, "enter")
+	cv, ok := m.top().(*contextsView)
+	if !ok {
+		t.Fatalf("clusters action should open the contexts table, got %T", m.top())
+	}
+	out := stripANSI(m.View().Content)
+	for _, want := range []string{"CONTEXT", "CLUSTER", "test-ctx", "other-ctx", "kube-system", "2 contexts"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("contexts table missing %q:\n%s", want, out)
+		}
+	}
+	// Cursor starts on the current context; enter notices, no switch.
+	if sel, _ := cv.selected(); sel.Name != "test-ctx" {
+		t.Fatalf("cursor should start on the current context, got %q", sel.Name)
+	}
+	m, _ = press(m, "enter")
+	if m.confirm != nil {
+		t.Error("switching to the current context should not confirm")
+	}
+	// Move to the other context (whichever direction reaches it) and switch.
+	cv = m.top().(*contextsView)
+	if sel, _ := cv.selected(); sel.Name == "test-ctx" {
+		m, _ = press(m, "up")
+		if sel, _ := m.top().(*contextsView).selected(); sel.Name == "test-ctx" {
+			m, _ = press(m, "down")
+		}
+	}
+	if sel, _ := m.top().(*contextsView).selected(); sel.Name == "test-ctx" {
+		t.Fatal("could not move off the current context")
+	}
+	m, _ = press(m, "enter")
+	if m.confirm == nil || !strings.Contains(stripANSI(m.View().Content), "switch cluster?") {
+		t.Error("selecting another context should confirm a switch")
+	}
+	// esc leaves the table.
+	m, _ = press(m, "n")
+	m, _ = press(m, "esc")
+	if _, ok := m.top().(*resourceView); !ok {
+		t.Error("esc should leave the contexts table")
+	}
+}
+
+func TestCtxNameStillSwitchesInline(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	m = typeStr(m, "ctx other")
+	it, ok := m.palette.selected()
+	if !ok || it.Kind != itemContext || it.Name != "other-ctx" {
+		t.Fatalf("'ctx other' should still offer the context inline, got %+v", it)
+	}
+}
+
+func TestShortNameBoost(t *testing.T) {
+	m, _ := newTest(t)
+	// Discovery with kustomizations (ks) and a decoy that fuzzy-matches "ks".
+	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{
+		{GVR: schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, Kind: "NetworkPolicy"},
+		{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", ShortNames: []string{"ks"}},
+	}})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	m = typeStr(m, "ks")
+	it, ok := m.palette.selected()
+	if !ok || it.Resource.Name() != "kustomizations" {
+		t.Errorf("'ks' should rank kustomizations first, got %+v", it)
+	}
+}
