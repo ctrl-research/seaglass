@@ -63,6 +63,10 @@ transient ones amber, failures like CrashLoopBackOff, OOMKilled, and
 ImagePullBackOff red. An object's detail view shows per-container state,
 restart counts, and problem reasons.
 
+Contextual actions (delete, restart, scale, reconcile) are hidden from
+the palette by default so a filter can't select one by accident; press
+`ctrl+a` in the palette to show them, or use their direct keys. 
+
 Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
 `ns all` returns to all namespaces. Resource short names work (`ks` →
 kustomizations, `po` → pods) via the API server's own shortNames, and an

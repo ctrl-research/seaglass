@@ -74,6 +74,7 @@ type Model struct {
 	connecting     string // context name while switching, "" otherwise
 	err            error
 	showHelp       bool
+	showActions    bool // list contextual actions in the palette (default off)
 	confirm        *confirmDialog
 	prompt         prompt
 	execTarget     *target         // pod awaiting a container choice for a shell
@@ -610,6 +611,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.err = nil
 	if m.palette.open {
+		if is(msg, keys.ToggleActions) {
+			m.showActions = !m.showActions
+			return m, m.openPalette()
+		}
 		chosen, closed, cmd := m.palette.update(msg)
 		if closed {
 			m.top().resize(m.width, m.bodyHeight())
@@ -638,13 +643,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case is(msg, keys.Palette):
-		var extra []paletteItem
-		if rv, ok := top.(*resourceView); ok {
-			if row, ok := rv.selectedRow(); ok {
-				extra = actionItems(rv.res, row, m.configActions)
-			}
-		}
-		cmd := m.palette.showExtra(extra)
+		cmd := m.openPalette()
 		top.resize(m.width, m.bodyHeight())
 		return m, cmd
 	case is(msg, keys.Help):
@@ -939,6 +938,31 @@ func (m *Model) setNotice(text string) tea.Cmd {
 	m.noticeSeq++
 	seq := m.noticeSeq
 	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return clearNoticeMsg{seq: seq} })
+}
+
+// openPalette opens the command palette, including contextual row actions
+// only when showActions is on. It preserves the current query so toggling
+// actions mid-search does not lose typed text.
+func (m *Model) openPalette() tea.Cmd {
+	var extra []paletteItem
+	if m.showActions {
+		if rv, ok := m.top().(*resourceView); ok {
+			if row, ok := rv.selectedRow(); ok {
+				extra = actionItems(rv.res, row, m.configActions)
+			}
+		}
+	}
+	query := ""
+	if m.palette.open {
+		query = m.palette.input.Value()
+	}
+	cmd := m.palette.showExtra(extra)
+	m.palette.showActions = m.showActions
+	if query != "" {
+		m.palette.input.SetValue(query)
+		m.palette.filter()
+	}
+	return cmd
 }
 
 // helpSections assembles the overlay: global, then the top view's, then

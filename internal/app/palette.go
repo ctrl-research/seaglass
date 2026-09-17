@@ -99,6 +99,15 @@ type palette struct {
 	// are gated behind a "ctx"/"cluster" prefix so a filter never switches
 	// clusters by accident.
 	hasContexts bool
+	// showActions mirrors the model flag, for the input-line hint only.
+	showActions bool
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 const palettePlaceholder = "resource, namespace, or context"
@@ -354,8 +363,11 @@ func (p *palette) height() int {
 
 // view renders the dropdown at the given width.
 func (p *palette) view(width int) string {
-	p.input.SetWidth(max(width-4, 10))
-	lines := []string{palInputStyle.Render(p.input.View())}
+	hint := palKindStyle.Render("ctrl+a actions " + onOff(p.showActions))
+	p.input.SetWidth(max(width-4-lipgloss.Width(hint)-2, 10))
+	inputLine := palInputStyle.Render(p.input.View())
+	gap := max(width-lipgloss.Width(inputLine)-lipgloss.Width(hint)-1, 1)
+	lines := []string{inputLine + strings.Repeat(" ", gap) + hint}
 
 	if len(p.matches) == 0 {
 		lines = append(lines, palEmptyStyle.Render("   no matches"))

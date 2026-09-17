@@ -271,6 +271,8 @@ func kp(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	case "ctrl+]":
 		return tea.KeyPressMsg{Code: ']', Mod: tea.ModCtrl}
+	case "ctrl+a":
+		return tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl}
 	}
 	r := []rune(s)
 	return tea.KeyPressMsg{Code: r[0], Text: s}
@@ -1099,6 +1101,17 @@ func TestPaletteListsActionsForSelection(t *testing.T) {
 	m, _ := newTest(t)
 	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
 	m, _ = press(m, ":")
+	// Actions are hidden by default; no contextual action appears.
+	for _, i := range m.palette.matches {
+		if strings.HasPrefix(m.palette.items[i].Name, "act:") {
+			t.Fatal("contextual actions should be hidden by default")
+		}
+	}
+	// Toggle actions on (ctrl+a); now the delete action is offered.
+	m, _ = press(m, "ctrl+a")
+	if !m.showActions {
+		t.Fatal("ctrl+a should enable actions")
+	}
 	if it, ok := m.palette.selected(); !ok || it.Kind != itemAction || it.Label != "delete" {
 		t.Fatalf("first palette item should be the delete action for the row, got %+v", it)
 	}
@@ -2410,8 +2423,10 @@ func fluxSnap() k8s.Snapshot {
 func TestConfigActionSuspendResume(t *testing.T) {
 	m, _, _ := newTestWithRules(t, fluxRuleset(t))
 	m = feed(m, k8s.Update{Snapshot: fluxSnap(), Status: k8s.StatusLive})
-	// The palette offers the flux actions for the selected Kustomization.
+	// The palette offers the flux actions for the selected Kustomization
+	// once actions are toggled on.
 	m, _ = press(m, ":")
+	m, _ = press(m, "ctrl+a")
 	labels := map[string]bool{}
 	for _, it := range m.palette.items {
 		labels[it.Label] = true
@@ -2442,6 +2457,7 @@ func TestConfigActionResumePatches(t *testing.T) {
 	m, _, _ := newTestWithRules(t, fluxRuleset(t))
 	m = feed(m, k8s.Update{Snapshot: fluxSnap(), Status: k8s.StatusLive})
 	m, _ = press(m, ":")
+	m, _ = press(m, "ctrl+a")
 	m = typeStr(m, "resume")
 	m, _ = press(m, "enter")
 	// resume has no confirm in the preset; it runs directly.
@@ -2453,6 +2469,7 @@ func TestConfigActionResumePatches(t *testing.T) {
 	m2, _, _ := newTestWithRules(t, fluxRuleset(t))
 	m2 = feed(m2, k8s.Update{Snapshot: fluxSnap(), Status: k8s.StatusLive})
 	m2, _ = press(m2, ":")
+	m2, _ = press(m2, "ctrl+a")
 	m2 = typeStr(m2, "resume")
 	m2, cmd := press(m2, "enter")
 	if cmd == nil {
@@ -2771,5 +2788,41 @@ func TestShortNameBoost(t *testing.T) {
 	it, ok := m.palette.selected()
 	if !ok || it.Resource.Name() != "kustomizations" {
 		t.Errorf("'ks' should rank kustomizations first, got %+v", it)
+	}
+}
+
+func TestActionsToggle(t *testing.T) {
+	m, _ := newTest(t)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	// Default: hidden. The input line hints the toggle is off.
+	if m.showActions {
+		t.Fatal("actions should be hidden by default")
+	}
+	out := stripANSI(m.View().Content)
+	if !strings.Contains(out, "ctrl+a actions off") {
+		t.Errorf("palette should hint the actions toggle:\n%s", out)
+	}
+	// Type a query, then toggle actions on; the query is preserved.
+	m = typeStr(m, "del")
+	m, _ = press(m, "ctrl+a")
+	if !m.showActions {
+		t.Fatal("ctrl+a should enable actions")
+	}
+	if m.palette.input.Value() != "del" {
+		t.Errorf("query lost on toggle: %q", m.palette.input.Value())
+	}
+	if it, ok := m.palette.selected(); !ok || it.Label != "delete" {
+		t.Errorf("with actions on, 'del' should match delete, got %+v", it)
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "ctrl+a actions on") {
+		t.Error("hint should show actions on")
+	}
+	// Toggle back off; the delete action disappears.
+	m, _ = press(m, "ctrl+a")
+	if _, ok := m.palette.selected(); ok {
+		if it, _ := m.palette.selected(); strings.HasPrefix(it.Name, "act:") {
+			t.Error("toggling off should hide contextual actions again")
+		}
 	}
 }
