@@ -63,8 +63,16 @@ transient ones amber, failures like CrashLoopBackOff, OOMKilled, and
 ImagePullBackOff red. An object's detail view shows per-container state,
 restart counts, and problem reasons.
 
+Contextual actions (delete, restart, scale, reconcile) are hidden from
+the palette by default so a filter can't select one by accident; press
+`ctrl+a` in the palette to show them, or use their direct keys. 
+
 Palette tips: `deploy` finds deployments, `ns kube` narrows to namespaces,
-`ns all` returns to all namespaces, `ctx prod` narrows to contexts. The
+`ns all` returns to all namespaces. Resource short names work (`ks` →
+kustomizations, `po` → pods) via the API server's own shortNames, and an
+exact short name always ranks first. Contexts are never mixed into a plain
+filter: the palette's `clusters` entry opens a table of all contexts, and
+`ctx <name>` switches directly; either way a switch asks for confirmation. The
 palette also has `quit` (also `exit` or `:q`) and `help` actions, an `events` cluster stream, and lists
 the actions available for the selected row at the top. Choosing a resource pushes a new view;
 choosing a namespace keeps the current resource and resets the view stack;

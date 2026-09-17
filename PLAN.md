@@ -251,9 +251,10 @@ Work items:
   only for resource types a badge targets, so large tables are
   unaffected.
 - [ ] Commands via ExecProcess with terminal release and restore.
-- [ ] Flux preset: reconcile (with source), suspend, resume; jumps for
-  managed-by labels and `spec.sourceRef`; badges for Ready=False and
-  `spec.suspend`; the `flux` resource group listing every Flux kind.
+- [x] Flux preset actions/jumps/badges verified against a real Flux
+  install: reconcile+wait, suspend/resume, source jump (spec.sourceRef),
+  managed-by label jumps, not-ready and suspended badges. The `flux`
+  resource-group view still to come.
 - [ ] Flux code items that config cannot express: parse
   `status.inventory.entries` (`ns_name_group_kind`) into a jumpable list;
   compose the trace chain "Managed by Kustomization/apps ← GitRepository/
@@ -264,9 +265,10 @@ Work items:
 - [ ] Generic resource-group view: one table merging several streams with
   a KIND column, not-ready first. Used by the `flux` group and a
   `workloads` group (Deployments, StatefulSets, DaemonSets, Jobs).
-- [ ] Fixtures: `make demo-flux` runs `flux install` on the kind cluster and
-  applies a working and a deliberately broken Kustomization. Unit tests
-  run every preset rule against fixture objects.
+- [x] Fixtures: `make demo-flux` (hack/demo-flux.sh) installs Flux on the
+  kind cluster and applies a working (podinfo) and a deliberately broken
+  Kustomization, idempotently. Used to exercise the preset against real
+  objects; verified badges, source jump, and reconcile+wait live.
 
 Parked: `flux diff` (needs a local kustomize build), image automation
 views, controller log correlation per object. cert-manager and Argo CD

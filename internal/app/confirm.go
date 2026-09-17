@@ -16,6 +16,9 @@ type confirmDialog struct {
 	hasForce   bool
 	forceLabel string
 	force      bool
+	// connecting, when set, becomes the status-bar "connecting to …" note
+	// while the confirmed operation runs (used for cluster switches).
+	connecting string
 	// run executes the confirmed operation, receiving the force state.
 	run func(force bool) tea.Cmd
 }

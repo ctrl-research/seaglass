@@ -64,6 +64,7 @@ const (
 	actionHelp     = "help"
 	actionForwards = "forwards"
 	actionEvents   = "events"
+	actionContexts = "clusters"
 )
 
 // paletteItem is one selectable entry.
@@ -77,6 +78,7 @@ type paletteItem struct {
 	Since    time.Duration
 	Text     string // clipboard text when Kind == itemCopy
 	search   string
+	exact    []string // lowercased aliases that, matched exactly, rank first
 }
 
 // paletteMaxVisible caps the dropdown height.
@@ -93,6 +95,19 @@ type palette struct {
 	matches []int
 	cursor  int
 	width   int
+	// hasContexts is true when the current item set contains contexts, which
+	// are gated behind a "ctx"/"cluster" prefix so a filter never switches
+	// clusters by accident.
+	hasContexts bool
+	// showActions mirrors the model flag, for the input-line hint only.
+	showActions bool
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 const palettePlaceholder = "resource, namespace, or context"
@@ -123,7 +138,8 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 			detail = strings.Join(r.ShortNames, ",") + " · " + detail
 		}
 		search := strings.ToLower(strings.Join(append([]string{r.Name(), r.Kind, r.GroupVersion()}, r.ShortNames...), " "))
-		items = append(items, paletteItem{Kind: itemResource, Label: r.Name(), Detail: detail, Resource: r, search: search})
+		exact := append([]string{strings.ToLower(r.Name()), strings.ToLower(r.Kind)}, lowerAll(r.ShortNames)...)
+		items = append(items, paletteItem{Kind: itemResource, Label: r.Name(), Detail: detail, Resource: r, search: search, exact: exact})
 	}
 	if len(namespaces) > 0 {
 		items = append(items, paletteItem{Kind: itemNamespace, Label: "all namespaces", Detail: "namespace · every namespace at once", Name: "", search: "ns namespace all -a"})
@@ -132,9 +148,10 @@ func buildItems(resources []k8s.Resource, namespaces, contexts []string) []palet
 		items = append(items, paletteItem{Kind: itemNamespace, Label: ns, Detail: "namespace", Name: ns, search: strings.ToLower("ns namespace " + ns)})
 	}
 	for _, c := range contexts {
-		items = append(items, paletteItem{Kind: itemContext, Label: c, Detail: "context", Name: c, search: strings.ToLower("ctx context " + c)})
+		items = append(items, paletteItem{Kind: itemContext, Label: c, Detail: "context · switch cluster", Name: c, search: strings.ToLower("ctx cluster context " + c)})
 	}
 	items = append(items,
+		paletteItem{Kind: itemAction, Label: "clusters", Detail: "switch context · a table of all clusters", Name: actionContexts, search: "clusters cluster ctx context switch"},
 		paletteItem{Kind: itemAction, Label: "events", Detail: "cluster events, newest first, warnings highlighted", Name: actionEvents, search: "events warnings ev"},
 		paletteItem{Kind: itemAction, Label: "port-forwards", Detail: "list and cancel active port-forwards", Name: actionForwards, search: "port forwards proxy tunnel"},
 		paletteItem{Kind: itemAction, Label: "help", Detail: "show every key for this view", Name: actionHelp, search: "help keys ?"},
@@ -163,8 +180,12 @@ func (p *palette) setItems(items []paletteItem) {
 func (p *palette) use(items []paletteItem) {
 	p.items = items
 	p.search = make([]string, len(items))
+	p.hasContexts = false
 	for i, it := range items {
 		p.search[i] = it.search
+		if it.Kind == itemContext {
+			p.hasContexts = true
+		}
 	}
 	p.filter()
 }
@@ -218,9 +239,44 @@ func sortItems(cols []k8s.Column, current int) []paletteItem {
 	return items
 }
 
-// filter recomputes matches, ranked by score then original order.
+// filter recomputes matches, ranked by score then original order. Contexts
+// only appear when the query begins with "ctx" or "cluster"; otherwise they
+// are hidden so a resource/namespace filter can never select one.
 func (p *palette) filter() {
-	idx, scores := fuzzyFilter(p.input.Value(), p.search)
+	q := strings.ToLower(strings.TrimSpace(p.input.Value()))
+	contextMode := false
+	if p.hasContexts {
+		// Only enter inline context mode when a name follows the keyword;
+		// a bare "ctx" leaves the "clusters" entry (which opens the table).
+		if rest, ok := stripKeyword(q, "ctx", "cluster", "context"); ok && rest != "" {
+			contextMode = true
+			q = rest
+		}
+	}
+	idx, scores := fuzzyFilter(q, p.search)
+	// Boost an exact short-name/name match so e.g. "ks" ranks kustomizations
+	// first over incidental fuzzy matches.
+	if q != "" && scores != nil {
+		for _, i := range idx {
+			for _, a := range p.items[i].exact {
+				if a == q {
+					scores[i] += 100000
+					break
+				}
+			}
+		}
+	}
+	if p.hasContexts {
+		filtered := idx[:0]
+		for _, i := range idx {
+			isCtx := p.items[i].Kind == itemContext
+			if contextMode != isCtx {
+				continue
+			}
+			filtered = append(filtered, i)
+		}
+		idx = filtered
+	}
 	p.matches = idx
 	if scores != nil {
 		sort.SliceStable(p.matches, func(i, j int) bool {
@@ -228,6 +284,21 @@ func (p *palette) filter() {
 		})
 	}
 	p.clampCursor()
+}
+
+// stripKeyword returns the remainder of q after a leading keyword (as a
+// whole first word), and whether one was present. "ctx", "ctx ", and
+// "ctx prod" all match; "context-name" does not.
+func stripKeyword(q string, keywords ...string) (string, bool) {
+	for _, kw := range keywords {
+		if q == kw {
+			return "", true
+		}
+		if strings.HasPrefix(q, kw+" ") {
+			return strings.TrimSpace(q[len(kw):]), true
+		}
+	}
+	return q, false
 }
 
 func (p *palette) clampCursor() {
@@ -292,8 +363,11 @@ func (p *palette) height() int {
 
 // view renders the dropdown at the given width.
 func (p *palette) view(width int) string {
-	p.input.SetWidth(max(width-4, 10))
-	lines := []string{palInputStyle.Render(p.input.View())}
+	hint := palKindStyle.Render("ctrl+a actions " + onOff(p.showActions))
+	p.input.SetWidth(max(width-4-lipgloss.Width(hint)-2, 10))
+	inputLine := palInputStyle.Render(p.input.View())
+	gap := max(width-lipgloss.Width(inputLine)-lipgloss.Width(hint)-1, 1)
+	lines := []string{inputLine + strings.Repeat(" ", gap) + hint}
 
 	if len(p.matches) == 0 {
 		lines = append(lines, palEmptyStyle.Render("   no matches"))
@@ -407,4 +481,12 @@ func relatedItems(targets []relatedTarget) []paletteItem {
 		items[i] = paletteItem{Kind: itemRelated, Label: t.label, Detail: t.detail, Index: i, search: strings.ToLower(t.label + " " + t.detail)}
 	}
 	return items
+}
+
+func lowerAll(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = strings.ToLower(s)
+	}
+	return out
 }

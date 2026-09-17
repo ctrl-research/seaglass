@@ -64,14 +64,17 @@ type Model struct {
 	stack  []view
 	nextID int
 
-	palette    palette
-	resources  []k8s.Resource
-	namespaces []string
-	contexts   []string
+	palette        palette
+	resources      []k8s.Resource
+	namespaces     []string
+	contexts       []string
+	contextInfos   []k8s.ContextInfo
+	currentContext string
 
 	connecting     string // context name while switching, "" otherwise
 	err            error
 	showHelp       bool
+	showActions    bool // list contextual actions in the palette (default off)
 	confirm        *confirmDialog
 	prompt         prompt
 	execTarget     *target         // pod awaiting a container choice for a shell
@@ -105,8 +108,10 @@ type (
 		err   error
 	}
 	contextsMsg struct {
-		names []string
-		err   error
+		names   []string
+		infos   []k8s.ContextInfo
+		current string
+		err     error
 	}
 	clientMsg struct {
 		client *k8s.Client
@@ -175,8 +180,8 @@ func (m Model) Init() tea.Cmd {
 	cmds = append(cmds, m.discoverCmds()...)
 	if m.contexts == nil {
 		cmds = append(cmds, func() tea.Msg {
-			names, _, err := k8s.ListContexts()
-			return contextsMsg{names: names, err: err}
+			infos, current, err := k8s.ListContextInfos()
+			return contextsMsg{infos: infos, current: current, err: err}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -505,7 +510,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case contextsMsg:
 		if msg.err == nil {
-			m.contexts = msg.names
+			if msg.infos != nil {
+				m.contextInfos = msg.infos
+				m.currentContext = msg.current
+				names := make([]string, len(msg.infos))
+				for i, ci := range msg.infos {
+					names[i] = ci.Name
+				}
+				m.contexts = names
+			} else {
+				m.contexts = msg.names
+			}
 		}
 		m.rebuildPalette()
 		return m, nil
@@ -557,6 +572,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "y", "Y":
 			d := m.confirm
 			m.confirm = nil
+			if d.connecting != "" {
+				m.connecting = d.connecting
+			}
 			return m, d.run(d.force)
 		case "f", "F":
 			if m.confirm.hasForce {
@@ -593,6 +611,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.err = nil
 	if m.palette.open {
+		if is(msg, keys.ToggleActions) {
+			m.showActions = !m.showActions
+			return m, m.openPalette()
+		}
 		chosen, closed, cmd := m.palette.update(msg)
 		if closed {
 			m.top().resize(m.width, m.bodyHeight())
@@ -621,13 +643,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 	case is(msg, keys.Palette):
-		var extra []paletteItem
-		if rv, ok := top.(*resourceView); ok {
-			if row, ok := rv.selectedRow(); ok {
-				extra = actionItems(rv.res, row, m.configActions)
-			}
-		}
-		cmd := m.palette.showExtra(extra)
+		cmd := m.openPalette()
 		top.resize(m.width, m.bodyHeight())
 		return m, cmd
 	case is(msg, keys.Help):
@@ -810,6 +826,17 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.computeRelated(ov.res, ov.namespace, ov.name, ov.obj)
 		}
 	}
+	if cv, ok := top.(*contextsView); ok {
+		if is(msg, keys.Accept) {
+			if ci, ok := cv.selected(); ok {
+				if m.client != nil && ci.Name == m.client.Context {
+					return m, m.setNotice("already on " + ci.Name)
+				}
+				m.confirm = m.switchClusterConfirm(ci.Name)
+			}
+			return m, nil
+		}
+	}
 	if fv, ok := top.(*forwardsView); ok {
 		switch {
 		case is(msg, keys.Delete), is(msg, keys.Accept):
@@ -913,6 +940,31 @@ func (m *Model) setNotice(text string) tea.Cmd {
 	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return clearNoticeMsg{seq: seq} })
 }
 
+// openPalette opens the command palette, including contextual row actions
+// only when showActions is on. It preserves the current query so toggling
+// actions mid-search does not lose typed text.
+func (m *Model) openPalette() tea.Cmd {
+	var extra []paletteItem
+	if m.showActions {
+		if rv, ok := m.top().(*resourceView); ok {
+			if row, ok := rv.selectedRow(); ok {
+				extra = actionItems(rv.res, row, m.configActions)
+			}
+		}
+	}
+	query := ""
+	if m.palette.open {
+		query = m.palette.input.Value()
+	}
+	cmd := m.palette.showExtra(extra)
+	m.palette.showActions = m.showActions
+	if query != "" {
+		m.palette.input.SetValue(query)
+		m.palette.filter()
+	}
+	return cmd
+}
+
 // helpSections assembles the overlay: global, then the top view's, then
 // the palette's.
 func (m Model) helpSections() []ui.HelpSection {
@@ -983,6 +1035,8 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 			m.openForwards()
 		case actionEvents:
 			return m.openClusterEvents()
+		case actionContexts:
+			m.openContexts()
 		default:
 			if name, ok := strings.CutPrefix(it.Name, "act:"); ok {
 				if a, found := actionByName(name, m.configActions); found {
@@ -1012,14 +1066,48 @@ func (m *Model) choose(it paletteItem) tea.Cmd {
 		if m.client != nil && it.Name == m.client.Context {
 			return nil
 		}
-		m.connecting = it.Name
-		name := it.Name
-		return func() tea.Msg {
-			c, err := k8s.New(name, "")
-			return clientMsg{client: c, err: err}
-		}
+		// Switching clusters is disruptive: confirm first.
+		m.confirm = m.switchClusterConfirm(it.Name)
+		return nil
 	}
 	return nil
+}
+
+// openContexts pushes the contexts table.
+func (m *Model) openContexts() {
+	infos := m.contextInfos
+	if infos == nil {
+		for _, n := range m.contexts {
+			infos = append(infos, k8s.ContextInfo{Name: n})
+		}
+	}
+	cur := m.currentContext
+	if m.client != nil {
+		cur = m.client.Context
+	}
+	v := newContextsView(infos, cur)
+	m.top().stop()
+	m.stack = append(m.stack, v)
+	v.resize(m.width, m.bodyHeight())
+}
+
+// switchClusterConfirm builds a confirmation for changing kube context.
+func (m *Model) switchClusterConfirm(name string) *confirmDialog {
+	from := "(none)"
+	if m.client != nil {
+		from = m.client.Context
+	}
+	return &confirmDialog{
+		title:      "switch cluster?",
+		detail:     from + "  →  " + name,
+		connecting: name,
+		run: func(bool) tea.Cmd {
+			return func() tea.Msg {
+				c, err := k8s.New(name, "")
+				return clientMsg{client: c, err: err}
+			}
+		},
+	}
 }
 
 // startTop sizes and starts the top view.

@@ -53,6 +53,9 @@ type keyMap struct {
 	Forwards key.Binding
 	Delete   key.Binding
 
+	// Palette
+	ToggleActions key.Binding
+
 	// Palette and filter input
 	Accept   key.Binding
 	Up       key.Binding
@@ -103,6 +106,8 @@ var keys = keyMap{
 	LogFollow:     bind("f", "follow (jump to end)", "f"),
 	LogSave:       bind("S", "save to file", "S"),
 
+	ToggleActions: bind("ctrl+a", "show/hide actions", "ctrl+a"),
+
 	Accept:   bind("enter", "choose", "enter"),
 	Up:       bind("↑/ctrl+p", "previous", "up", "ctrl+p", "ctrl+k"),
 	Down:     bind("↓/ctrl+n", "next", "down", "ctrl+n", "ctrl+j"),
@@ -124,5 +129,5 @@ func globalHelp() helpSection {
 }
 
 func paletteHelp() helpSection {
-	return helpSection{"Palette / filter input", []key.Binding{keys.Up, keys.Down, keys.Accept, bind("esc", "close", "esc")}}
+	return helpSection{"Palette / filter input", []key.Binding{keys.Up, keys.Down, keys.Accept, keys.ToggleActions, bind("esc", "close", "esc")}}
 }
