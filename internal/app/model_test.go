@@ -2933,3 +2933,69 @@ func TestGroupSurvivesNamespaceChange(t *testing.T) {
 		t.Errorf("group member should stream cluster-wide after ns=all, got %q", last)
 	}
 }
+
+func TestCommandItemsHiddenUntilToggle(t *testing.T) {
+	rs := config.Ruleset{Commands: []config.CommandRule{
+		{Name: "shell-out", Desc: "run a thing", Match: config.Match{Resource: "pods"}, Command: []string{"true"}},
+	}}
+	fs := &fakeStreamer{}
+	m := New(Options{
+		Client: &k8s.Client{Context: "test-ctx", Namespace: "default"}, Namespace: "default", Resource: k8s.Pods,
+		SaveDir: t.TempDir(), streamer: fs, getter: &fakeGetter{}, patcher: &fakePatcher{},
+		logger: &fakeLogger{}, execer: &fakeExecer{}, editer: &fakeEditor{}, forwarder: &fakeForwarder{},
+		contexts: []string{"test-ctx"}, Ruleset: rs,
+	})
+	rv(m).start(m.deps)
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	// Hidden by default (commands are contextual actions).
+	m, _ = press(m, ":")
+	for _, i := range m.palette.matches {
+		if strings.HasPrefix(m.palette.items[i].Name, "cmd:") {
+			t.Fatal("commands should be hidden until the actions toggle")
+		}
+	}
+	// After ctrl+a, the command appears.
+	m, _ = press(m, "ctrl+a")
+	m = typeStr(m, "shell-out")
+	if it, ok := m.palette.selected(); !ok || it.Name != "cmd:shell-out" {
+		t.Fatalf("command not offered after toggle, got %+v", it)
+	}
+	// Choosing it runs an ExecProcess command (non-nil).
+	m, cmd := press(m, "enter")
+	if cmd == nil {
+		t.Fatal("choosing a command should run it")
+	}
+}
+
+func TestCommandConfirm(t *testing.T) {
+	rs := config.Ruleset{Commands: []config.CommandRule{
+		{Name: "danger", Match: config.Match{Resource: "pods"}, Command: []string{"true"}, Confirm: true},
+	}}
+	fs := &fakeStreamer{}
+	m := New(Options{
+		Client: &k8s.Client{Context: "test-ctx", Namespace: "default"}, Namespace: "default", Resource: k8s.Pods,
+		SaveDir: t.TempDir(), streamer: fs, getter: &fakeGetter{}, patcher: &fakePatcher{},
+		logger: &fakeLogger{}, execer: &fakeExecer{}, editer: &fakeEditor{}, forwarder: &fakeForwarder{},
+		contexts: []string{"test-ctx"}, Ruleset: rs,
+	})
+	rv(m).start(m.deps)
+	mm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = mm.(Model)
+	m = feed(m, k8s.Update{Snapshot: snap(), Status: k8s.StatusLive})
+	m, _ = press(m, ":")
+	m, _ = press(m, "ctrl+a")
+	m = typeStr(m, "danger")
+	m, cmd := press(m, "enter")
+	if cmd != nil || m.confirm == nil {
+		t.Fatal("a confirm command should ask first")
+	}
+	if !strings.Contains(stripANSI(m.View().Content), "run danger?") {
+		t.Errorf("confirm dialog missing:\n%s", stripANSI(m.View().Content))
+	}
+	m, cmd = press(m, "y")
+	if cmd == nil {
+		t.Fatal("y should run the command")
+	}
+}

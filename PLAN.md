@@ -252,7 +252,10 @@ Work items:
   predicate holds. Rows carry the full object (includeObject=Object)
   only for resource types a badge targets, so large tables are
   unaffected.
-- [ ] Commands via ExecProcess with terminal release and restore.
+- [x] Commands via ExecProcess: config command rules run an external
+  program with the object's identity in the environment (SEAGLASS_CONTEXT/
+  NAMESPACE/NAME/KIND/GROUP/RESOURCE), optional confirm, gated behind the
+  actions toggle. The escape hatch for anything config cannot express.
 - [x] Flux preset actions/jumps/badges verified against a real Flux
   install: reconcile+wait, suspend/resume, source jump (spec.sourceRef),
   managed-by label jumps, not-ready and suspended badges. The `flux`
