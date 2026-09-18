@@ -424,6 +424,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case relatedMsg:
 		return m.handleRelated(msg)
 
+	case inventoryLoadedMsg:
+		if iv, ok := m.top().(*inventoryView); ok && iv.id == msg.id {
+			iv.handleLoaded(msg)
+		}
+		return m, nil
+
 	case commandDoneMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -846,6 +852,21 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.jumpToOwner(ov.res, ov.namespace, ov.name, ov.obj)
 		case is(msg, keys.Related):
 			return m, m.computeRelated(ov.res, ov.namespace, ov.name, ov.obj)
+		}
+	}
+	if iv, ok := top.(*inventoryView); ok {
+		switch {
+		case is(msg, keys.Detail), is(msg, keys.YAML), is(msg, keys.Accept):
+			if row, ok := iv.selectedRow(); ok && row.err == nil {
+				mode := modeDetail
+				if is(msg, keys.YAML) {
+					mode = modeYAML
+				}
+				iv.stop()
+				m.pushObject(row.res, row.ref.Namespace, row.ref.Name, mode)
+				return m, m.startTop()
+			}
+			return m, nil
 		}
 	}
 	if gv, ok := top.(*groupView); ok {

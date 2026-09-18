@@ -9,7 +9,12 @@ import (
 	"charm.land/lipgloss/v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/duration"
+
+	"github.com/ctrl-research/seaglass/internal/k8s"
 )
+
+// k8sFluxInfo aliases the Flux detail struct for the summary renderer.
+type k8sFluxInfo = k8s.FluxInfo
 
 var (
 	descKeyStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
@@ -293,4 +298,72 @@ func has(m map[string]any, key string) bool {
 	}
 	_, ok := m[key]
 	return ok
+}
+
+// FluxSummary renders a revision-first header for a Flux Kustomization or
+// HelmRelease: Ready, source and applied revision, attempted revision when
+// it differs, dependencies, inventory count, and managed-by.
+func FluxSummary(fi k8sFluxInfo) string {
+	var b strings.Builder
+	b.WriteString(descSectionStyle.Render("Flux") + "\n")
+	kv := func(k, v string) {
+		fmt.Fprintf(&b, "  %s %s\n", descKeyStyle.Render(fmt.Sprintf("%-13s", k+":")), v)
+	}
+	var ready string
+	switch fi.Ready {
+	case "True":
+		ready = descTrueStyle.Render("Ready")
+	case "False":
+		ready = descFalseStyle.Render("Not Ready")
+	case "":
+		ready = descDimStyle.Render("unknown")
+	default:
+		ready = fi.Ready
+	}
+	if fi.Suspended {
+		ready += descDimStyle.Render("  (suspended)")
+	}
+	kv("Status", ready)
+	if fi.ReadyMessage != "" {
+		kv("Message", fi.ReadyMessage)
+	}
+	if fi.Source != nil {
+		src := fi.Source.Kind + "/" + fi.Source.Name
+		if fi.AppliedRevision != "" {
+			src += descDimStyle.Render("  @ " + shortRev(fi.AppliedRevision))
+		}
+		kv("Source", src)
+	}
+	if fi.AttemptedRevision != "" && fi.AttemptedRevision != fi.AppliedRevision {
+		kv("Attempting", shortRev(fi.AttemptedRevision))
+	}
+	if fi.ManagedBy != nil {
+		kv("Managed by", fi.ManagedBy.Kind+"/"+fi.ManagedBy.Name)
+	}
+	if len(fi.DependsOn) > 0 {
+		names := make([]string, len(fi.DependsOn))
+		for i, d := range fi.DependsOn {
+			names[i] = d.Name
+		}
+		kv("Depends on", strings.Join(names, ", "))
+	}
+	if len(fi.Inventory) > 0 {
+		kv("Inventory", fmt.Sprintf("%d objects  %s", len(fi.Inventory), descDimStyle.Render("(J to browse)")))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// shortRev trims a Flux revision like "main@sha1:abc123..." to "main@abc123".
+func shortRev(rev string) string {
+	branch, digest, ok := strings.Cut(rev, "@")
+	if !ok {
+		return rev
+	}
+	if _, sha, ok := strings.Cut(digest, ":"); ok {
+		digest = sha
+	}
+	if len(digest) > 8 {
+		digest = digest[:8]
+	}
+	return branch + "@" + digest
 }

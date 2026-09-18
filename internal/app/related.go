@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -40,6 +41,8 @@ const (
 	relNode
 	// relObject opens a specific object's detail, resolved by kind/group.
 	relObject
+	// relInventory opens the Flux inventory list for a Kustomization.
+	relInventory
 )
 
 // relatedTarget is one navigable relationship of a source object.
@@ -55,6 +58,9 @@ type relatedTarget struct {
 	targetKind  string
 	targetGroup string
 	targetName  string
+	// relInventory:
+	inventory []k8s.ObjectRef
+	owner     string
 }
 
 // relatedMsg carries the related targets computed for a source object.
@@ -109,6 +115,14 @@ func relatedTargetsFor(res k8s.Resource, namespace, name string, o *unstructured
 			kind: relPodsOnNode, label: "pods on node", detail: "pods scheduled on " + name,
 			nodeName: name, title: "pods on " + name,
 		})
+	}
+	if k8s.IsFlux(res) {
+		if inv := k8s.FluxInventory(o); len(inv) > 0 {
+			out = append(out, relatedTarget{
+				kind: relInventory, label: "inventory", detail: fmt.Sprintf("%d managed objects", len(inv)),
+				inventory: inv, owner: res.Kind + "/" + name, title: "inventory",
+			})
+		}
 	}
 	out = append(out, configJumpTargets(res, namespace, o, jumps)...)
 	return out
@@ -221,6 +235,14 @@ func (m *Model) navigateRelated(t relatedTarget) tea.Cmd {
 		}
 		m.top().stop()
 		m.pushObject(node, "", t.nodeName, modeDetail)
+		return m.startTop()
+	case relInventory:
+		m.top().stop()
+		m.nextID++
+		iv := newInventoryView(m.nextID, t.owner, t.inventory, func(kind, group string) (k8s.Resource, bool) {
+			return k8s.ResourceByKindGroup(m.resources, kind, group)
+		})
+		m.stack = append(m.stack, iv)
 		return m.startTop()
 	case relObject:
 		target, ok := k8s.ResourceByKindGroup(m.resources, t.targetKind, t.targetGroup)

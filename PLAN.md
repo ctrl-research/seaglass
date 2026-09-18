@@ -260,13 +260,12 @@ Work items:
   install: reconcile+wait, suspend/resume, source jump (spec.sourceRef),
   managed-by label jumps, not-ready and suspended badges. The `flux`
   resource-group view still to come.
-- [ ] Flux code items that config cannot express: parse
-  `status.inventory.entries` (`ns_name_group_kind`) into a jumpable list;
-  compose the trace chain "Managed by Kustomization/apps ← GitRepository/
-  flux-system @ main/abc1234" by walking jump rules; show
-  `lastAppliedRevision`, `lastAttemptedRevision`, `spec.dependsOn` with
-  each dependency's Ready state at the top of Kustomization and
-  HelmRelease detail.
+- [x] Flux code-only detail: a revision-first summary at the top of
+  Kustomization/HelmRelease detail (Ready + message, source with short
+  applied revision, attempted revision when it differs, dependsOn,
+  managed-by, inventory count); `status.inventory.entries`
+  (`ns_name_group_kind`) parsed into a jumpable inventory list (`J`) that
+  fetches and lists the managed objects, each openable.
 - [x] Generic resource-group view: one table merging several streams with
   a KIND column (plus NAMESPACE/NAME/READY/STATUS/AGE from each object's
   Ready condition), not-ready first. Groups are a config type: the flux

@@ -96,7 +96,11 @@ func (v *objectView) refresh() {
 	case modeYAML:
 		v.vp.SetContent(ui.ColorizeYAML(v.yaml))
 	default:
-		v.vp.SetContent(ui.Describe(v.obj, time.Now()))
+		content := ui.Describe(v.obj, time.Now())
+		if k8s.IsFlux(v.res) {
+			content = ui.FluxSummary(k8s.FluxDetail(v.obj)) + "\n\n" + content
+		}
+		v.vp.SetContent(content)
 	}
 	v.vp.SetYOffset(off)
 }
