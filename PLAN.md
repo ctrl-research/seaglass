@@ -227,6 +227,9 @@ Config types:
   detail view and under a related-objects key.
 - **badges**: match plus a condition or field predicate, mapped to a row
   style (warning, error, muted) and an optional short tag.
+- **jumps** also cover `list` references: a field holding many object refs
+  (packed like Flux's inventory id, or structured) becomes a browsable
+  table. Keeps operator specifics in config, not core.
 - **groups**: a named merged table across several kinds, selected by a match
   glob or an explicit kinds list; opened from the palette.
 - **commands**: the escape hatch. Run a program with the selected object's
@@ -260,13 +263,15 @@ Work items:
   install: reconcile+wait, suspend/resume, source jump (spec.sourceRef),
   managed-by label jumps, not-ready and suspended badges. The `flux`
   resource-group view still to come.
-- [ ] Flux code items that config cannot express: parse
-  `status.inventory.entries` (`ns_name_group_kind`) into a jumpable list;
-  compose the trace chain "Managed by Kustomization/apps ← GitRepository/
-  flux-system @ main/abc1234" by walking jump rules; show
-  `lastAppliedRevision`, `lastAttemptedRevision`, `spec.dependsOn` with
-  each dependency's Ready state at the top of Kustomization and
-  HelmRelease detail.
+- [x] Inventory as a config `list` jump (not Flux code): a jump whose
+  `from.list` names a list field and `from.ref` decodes each item (a packed
+  `namespace_name_group_kind` string or structured sub-fields) into an
+  object; `J` opens a browsable table of the referenced objects, each
+  openable. The Flux preset declares it over `status.inventory.entries`.
+  Keeps the core k8s-native; Flux is entirely config.
+- Parked: a config-driven detail-summary (revision-first header) so an
+  operator can curate its detail view without code; describe + YAML +
+  jumps cover it for now.
 - [x] Generic resource-group view: one table merging several streams with
   a KIND column (plus NAMESPACE/NAME/READY/STATUS/AGE from each object's
   Ready condition), not-ready first. Groups are a config type: the flux

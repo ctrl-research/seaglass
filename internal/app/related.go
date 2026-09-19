@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -40,6 +42,9 @@ const (
 	relNode
 	// relObject opens a specific object's detail, resolved by kind/group.
 	relObject
+	// relObjectList opens a browsable list of objects referenced by a field
+	// (e.g. a Flux inventory), driven by a config list jump.
+	relObjectList
 )
 
 // relatedTarget is one navigable relationship of a source object.
@@ -55,6 +60,9 @@ type relatedTarget struct {
 	targetKind  string
 	targetGroup string
 	targetName  string
+	// relInventory:
+	inventory []k8s.ObjectRef
+	owner     string
 }
 
 // relatedMsg carries the related targets computed for a source object.
@@ -159,9 +167,88 @@ func configJumpTargets(res k8s.Resource, namespace string, o *unstructured.Unstr
 				kind: relPodsBySelector, label: j.Name, detail: "pods matching " + sel,
 				namespace: namespace, selector: sel, title: j.Name,
 			})
+		case j.From.List != "":
+			refs := extractRefs(o, j.From, namespace)
+			if len(refs) == 0 {
+				continue
+			}
+			out = append(out, relatedTarget{
+				kind: relObjectList, label: j.Name, detail: fmt.Sprintf("%d objects", len(refs)),
+				inventory: refs, owner: res.Kind, title: j.Name,
+			})
 		}
 	}
 	return out
+}
+
+// extractRefs reads a list at from.List and decodes each item into an object
+// reference using from.Ref. Supports a packed string field (Flux inventory)
+// or structured sub-fields. Missing namespaces default to the source's.
+func extractRefs(o *unstructured.Unstructured, from config.JumpFrom, defaultNS string) []k8s.ObjectRef {
+	items, found, _ := unstructured.NestedSlice(o.Object, splitDotPath(from.List)...)
+	if !found || from.Ref == nil {
+		return nil
+	}
+	var out []k8s.ObjectRef
+	for _, it := range items {
+		m, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		ref, ok := decodeRef(m, from.Ref, defaultNS)
+		if ok {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// decodeRef reads one object reference from a list item per the RefSpec.
+func decodeRef(item map[string]any, spec *config.RefSpec, defaultNS string) (k8s.ObjectRef, bool) {
+	if spec.Field != "" {
+		raw, _ := item[spec.Field].(string)
+		if raw == "" {
+			return k8s.ObjectRef{}, false
+		}
+		sep := spec.Sep
+		if sep == "" {
+			sep = "_"
+		}
+		order := strings.Split(spec.Format, sep)
+		parts := strings.SplitN(raw, sep, len(order))
+		if len(parts) != len(order) {
+			return k8s.ObjectRef{}, false
+		}
+		ref := k8s.ObjectRef{Namespace: defaultNS}
+		for i, field := range order {
+			switch field {
+			case "namespace":
+				if parts[i] != "" {
+					ref.Namespace = parts[i]
+				}
+			case "name":
+				ref.Name = parts[i]
+			case "group":
+				ref.Group = parts[i]
+			case "kind":
+				ref.Kind = parts[i]
+			}
+		}
+		return ref, ref.Name != "" && ref.Kind != ""
+	}
+	// Structured sub-fields.
+	str := func(path string) string {
+		if path == "" {
+			return ""
+		}
+		v, _ := item[path].(string)
+		return v
+	}
+	ref := k8s.ObjectRef{Kind: str(spec.Kind), Name: str(spec.Name), Group: str(spec.Group), Namespace: str(spec.Namespace)}
+	if ref.Namespace == "" {
+		ref.Namespace = defaultNS
+	}
+	return ref, ref.Name != "" && ref.Kind != ""
 }
 
 // selectorAtPath reads a label-map at a dotted path and joins it.
@@ -221,6 +308,14 @@ func (m *Model) navigateRelated(t relatedTarget) tea.Cmd {
 		}
 		m.top().stop()
 		m.pushObject(node, "", t.nodeName, modeDetail)
+		return m.startTop()
+	case relObjectList:
+		m.top().stop()
+		m.nextID++
+		iv := newInventoryView(m.nextID, t.owner, t.inventory, func(kind, group string) (k8s.Resource, bool) {
+			return k8s.ResourceByKindGroup(m.resources, kind, group)
+		})
+		m.stack = append(m.stack, iv)
 		return m.startTop()
 	case relObject:
 		target, ok := k8s.ResourceByKindGroup(m.resources, t.targetKind, t.targetGroup)

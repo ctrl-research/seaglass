@@ -262,3 +262,11 @@ func AgeString(u *unstructured.Unstructured, now time.Time) string {
 	}
 	return duration.HumanDuration(now.Sub(ts.Time))
 }
+
+// ObjectRef is a namespaced reference to an object of a kind/group.
+type ObjectRef struct {
+	Group     string
+	Kind      string
+	Namespace string
+	Name      string
+}
