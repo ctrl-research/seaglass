@@ -16,3 +16,10 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.13.2
+      # Presets ship in the binary; fail the build if one is invalid.
+      - run: go run ./cmd/seaglass presets validate
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check

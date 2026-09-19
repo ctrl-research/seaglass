@@ -33,6 +33,9 @@ func run() error {
 	if len(os.Args) > 1 && os.Args[1] == "presets" {
 		return runPresets(os.Args[2:])
 	}
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		return runConfig(os.Args[2:])
+	}
 
 	var (
 		kubeContext string
@@ -180,3 +183,78 @@ func runPresets(args []string) error {
 		return fmt.Errorf("unknown presets command %q (use list, show, or validate)", cmd)
 	}
 }
+
+// runConfig implements `seaglass config [validate|init|path]`.
+func runConfig(args []string) error {
+	cmd := "validate"
+	if len(args) > 0 {
+		cmd = args[0]
+	}
+	path, err := config.UserConfigPath()
+	if err != nil {
+		return err
+	}
+	switch cmd {
+	case "path":
+		fmt.Println(path)
+		return nil
+	case "validate":
+		if _, err := config.Load(); err != nil {
+			return err
+		}
+		if _, statErr := os.Stat(path); statErr == nil {
+			fmt.Printf("ok: %s and the built-in presets are valid\n", path)
+		} else {
+			fmt.Printf("ok: built-in presets are valid (no user config at %s)\n", path)
+		}
+		return nil
+	case "init":
+		if _, statErr := os.Stat(path); statErr == nil {
+			return fmt.Errorf("%s already exists; not overwriting", path)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(configTemplate), 0o644); err != nil {
+			return err
+		}
+		fmt.Printf("wrote a starter config to %s\n", path)
+		return nil
+	default:
+		return fmt.Errorf("unknown config command %q (use validate, init, or path)", cmd)
+	}
+}
+
+// configTemplate is the commented starter seaglass.yaml.
+const configTemplate = `# seaglass configuration. Rules here layer on top of the built-in presets
+# (see: seaglass presets list). Validate with: seaglass config validate
+#
+# disablePresets: [flux]   # turn a built-in preset off entirely
+#
+# actions:                 # patch or delete, optionally after a confirm/input
+#   - name: cordon
+#     match: {resource: nodes}
+#     confirm: true
+#     patch: {spec: {unschedulable: true}}
+#
+# jumps:                   # navigate from an object to related ones
+#   - name: secret
+#     match: {kind: Ingress}
+#     from: {field: spec.tls.0.secretName}   # (illustrative)
+#
+# badges:                  # color a row when a predicate holds
+#   - name: not ready
+#     match: {group: cert-manager.io}
+#     when: {condition: Ready, status: "False"}
+#     style: error
+#     tag: not-ready
+#
+# groups:                  # one table across several kinds
+#   - name: certs
+#     match: {group: cert-manager.io}
+#
+# commands:                # run an external program (the escape hatch)
+#   - name: stern
+#     match: {resource: pods}
+#     command: ["stern", "-n", "$SEAGLASS_NAMESPACE", "$SEAGLASS_NAME"]
+`

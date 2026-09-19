@@ -3,7 +3,34 @@
 A Kubernetes TUI. Single cluster, live by default, one code path for every
 resource. See [PLAN.md](PLAN.md) for the roadmap.
 
+## Install
+
+Homebrew:
+
+```sh
+brew install ctrl-research/tap/seaglass
+```
+
+Or the install script (downloads the latest release for your OS/arch to
+`~/.local/bin`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ctrl-research/seaglass/main/install.sh | sh
+```
+
+Pin a version with `SEAGLASS_VERSION=vX.Y.Z` or change the target with
+`SEAGLASS_BIN_DIR`. From source: `go install github.com/ctrl-research/seaglass/cmd/seaglass@latest`.
+
+## Configuration
+
+```sh
+seaglass config init       # write a commented ~/.config/seaglass/seaglass.yaml
+seaglass config validate   # check it (and the built-in presets); reports file:line
+seaglass presets list      # what ships built in (flux, core)
+```
+
 ## Run
+
 
 ```sh
 make run                                   # current kube context and namespace
