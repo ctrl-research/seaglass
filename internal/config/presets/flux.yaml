@@ -48,6 +48,11 @@ jumps:
       nameLabel: helm.toolkit.fluxcd.io/name
       namespaceLabel: helm.toolkit.fluxcd.io/namespace
     to: {group: helm.toolkit.fluxcd.io, kind: HelmRelease}
+  - name: inventory
+    match: {group: kustomize.toolkit.fluxcd.io}
+    from:
+      list: status.inventory.entries
+      ref: {field: id, format: "namespace_name_group_kind", sep: "_"}
 
 badges:
   - name: not ready

@@ -3000,9 +3000,13 @@ func TestCommandConfirm(t *testing.T) {
 	}
 }
 
-func TestFluxDetailAndInventory(t *testing.T) {
-	m, _, fg := newTestWithRules(t, config.Ruleset{})
-	// Discovery for the inventory kinds.
+func TestConfigListJumpInventory(t *testing.T) {
+	// A config list jump over status.inventory.entries (Flux-style packed id).
+	rs := config.Ruleset{Jumps: []config.JumpRule{
+		{Name: "inventory", Match: config.Match{Group: "kustomize.toolkit.fluxcd.io"},
+			From: config.JumpFrom{List: "status.inventory.entries", Ref: &config.RefSpec{Field: "id", Format: "namespace_name_group_kind", Sep: "_"}}},
+	}}
+	m, _, fg := newTestWithRules(t, rs)
 	mm, _ := m.Update(resourcesMsg{resources: []k8s.Resource{
 		{GVR: schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}, Kind: "Kustomization", Namespaced: true},
 		{GVR: schema.GroupVersionResource{Version: "v1", Resource: "services"}, Kind: "Service", Namespaced: true},
@@ -3012,51 +3016,29 @@ func TestFluxDetailAndInventory(t *testing.T) {
 	fg.obj = &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
 		"metadata": map[string]any{"name": "podinfo", "namespace": "flux-system"},
-		"spec":     map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "podinfo"}},
-		"status": map[string]any{
-			"lastAppliedRevision": "master@sha1:dd507173b7b75b",
-			"conditions":          []any{map[string]any{"type": "Ready", "status": "True", "message": "Applied revision: master"}},
-			"inventory": map[string]any{"entries": []any{
-				map[string]any{"id": "default_podinfo__Service", "v": "v1"},
-				map[string]any{"id": "default_podinfo_apps_Deployment", "v": "v1"},
-			}},
-		},
+		"status": map[string]any{"inventory": map[string]any{"entries": []any{
+			map[string]any{"id": "default_podinfo__Service", "v": "v1"},
+			map[string]any{"id": "default_podinfo_apps_Deployment", "v": "v1"},
+		}}},
 	}}
 	m = feed(m, k8s.Update{Snapshot: fluxSnap(), Status: k8s.StatusLive})
-	// Detail shows the Flux summary header.
-	m, _ = press(m, "enter")
-	m = openObject(m)
-	out := stripANSI(m.View().Content)
-	for _, want := range []string{"Flux", "Ready", "GitRepository/podinfo", "master@dd507173", "Inventory", "2 objects"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("flux detail missing %q:\n%s", want, out)
-		}
-	}
-	// J offers the inventory jump; choosing it opens the inventory list.
 	m, cmd := press(m, "J")
 	if cmd == nil {
-		t.Fatal("J should compute related targets")
+		t.Fatal("J should compute the config list jump")
 	}
-	mm, cmd = m.Update(cmd()) // single or picker
+	mm, _ = m.Update(cmd()) // single target -> navigate to the list view
 	m = mm.(Model)
-	// One related target (inventory) navigates directly.
 	iv, ok := m.top().(*inventoryView)
 	if !ok {
-		t.Fatalf("expected inventory view, got %T", m.top())
+		t.Fatalf("list jump should open the object list, got %T", m.top())
 	}
-	// The inventory fetch runs; feed its result.
-	if cmd != nil {
-		mm, _ = m.Update(cmd())
-		m = mm.(Model)
-	}
-	// Drive the load command explicitly.
 	loaded := iv.start(m.deps)()
 	mm, _ = m.Update(loaded)
 	m = mm.(Model)
-	out = stripANSI(m.View().Content)
+	out := stripANSI(m.View().Content)
 	for _, want := range []string{"KIND", "Service", "Deployment", "podinfo"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("inventory list missing %q:\n%s", want, out)
+			t.Errorf("object list missing %q:\n%s", want, out)
 		}
 	}
 }

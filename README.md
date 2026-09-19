@@ -109,10 +109,6 @@ seaglass presets show flux
 seaglass presets validate   # checks presets + your seaglass.yaml
 ```
 
-Flux Kustomizations and HelmReleases get a revision-first detail header
-(Ready, source, applied/attempted revision, dependsOn, managed-by) and a
-`J` "inventory" jump that lists the objects they manage.
-
 Actions run through the same patch/wait paths as the built-ins: an action
 rule fetches the object, renders its patch template (with `{{now}}`,
 `{{.input}}`, and `{{.spec...}}` paths), applies the merge patch, and waits

@@ -146,6 +146,30 @@ type JumpFrom struct {
 	Selector string `yaml:"selector,omitempty"`
 	// Field: a dotted path to a reference object with kind/name/namespace.
 	Field string `yaml:"field,omitempty"`
+	// List: a dotted path to a list of references; each item is decoded with
+	// Ref into an object to list in a browsable table. This generalizes
+	// Flux's status.inventory to any operator that exposes a managed-object
+	// list.
+	List string   `yaml:"list,omitempty"`
+	Ref  *RefSpec `yaml:"ref,omitempty"`
+}
+
+// RefSpec describes how to read an object reference from a list item. Use
+// Field+Format for a packed string (Flux inventory: the "id" field packs
+// namespace/name/group/kind joined by "_"); otherwise name the sub-fields
+// holding each part.
+type RefSpec struct {
+	// Packed form: the item field holding a delimited string, the order of
+	// its parts (a Sep-joined list of namespace/name/group/kind), and the
+	// separator (default "_").
+	Field  string `yaml:"field,omitempty"`
+	Format string `yaml:"format,omitempty"`
+	Sep    string `yaml:"sep,omitempty"`
+	// Structured form: sub-field paths within each item.
+	Kind      string `yaml:"kind,omitempty"`
+	Name      string `yaml:"name,omitempty"`
+	Namespace string `yaml:"namespace,omitempty"`
+	Group     string `yaml:"group,omitempty"`
 }
 
 // BadgeRule colors a row (and tags it) when a predicate holds.
@@ -252,8 +276,16 @@ func (r Ruleset) Validate(source string) error {
 		if j.From.Field != "" {
 			n++
 		}
+		if j.From.List != "" {
+			n++
+			if j.From.Ref == nil {
+				add("%s: from.list requires a ref", where)
+			} else if j.From.Ref.Field == "" && j.From.Ref.Kind == "" {
+				add("%s: from.ref needs field+format (packed) or kind/name subfields", where)
+			}
+		}
 		if n != 1 {
-			add("%s: from must set exactly one of nameLabel, selector, or field", where)
+			add("%s: from must set exactly one of nameLabel, selector, field, or list", where)
 		}
 	}
 	for i, b := range r.Badges {
