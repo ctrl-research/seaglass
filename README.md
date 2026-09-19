@@ -79,10 +79,10 @@ resource, in `state.json` next to the log. Flags override what it remembers.
 | `=` | Scale the selected Deployment, StatefulSet, or ReplicaSet: prompts for replicas, prefilled from the table |
 | `+` / `-` | Scale by one replica up or down |
 | `ctrl+d` | Delete the selected object; `f` in the dialog toggles force (grace period 0) |
+| `?` | Help overlay listing every key for the current view |
 
 Every action that changes the cluster (restart, scale, delete) asks for
 confirmation first: `y` runs it, `n` or `esc` cancels.
-| `?` | Help overlay listing every key for the current view |
 | `q` or `ctrl+c` | Quit |
 
 Pod and container statuses are colored by severity: healthy states green,
