@@ -152,3 +152,21 @@ func mustWrite(t *testing.T, path string, data []byte, _ os.FileMode) {
 		t.Fatal(err)
 	}
 }
+
+func TestValidateLineNumbers(t *testing.T) {
+	dir := t.TempDir()
+	user := filepath.Join(dir, "seaglass.yaml")
+	// A jump with no from on line 4.
+	mustWrite(t, user, []byte("actions:\n  - name: ok\n    match: {kind: X}\n    patch: {spec: {a: 1}}\njumps:\n  - name: bad\n    match: {kind: Y}\n"), 0o644)
+	_, err := loadFrom(user)
+	if err == nil {
+		t.Fatal("expected an error for the from-less jump")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "seaglass.yaml:6") {
+		t.Errorf("error should cite the jump's line (6):\n%s", msg)
+	}
+	if !strings.Contains(msg, "jump bad") || !strings.Contains(msg, "exactly one of") {
+		t.Errorf("error should name the jump and reason:\n%s", msg)
+	}
+}

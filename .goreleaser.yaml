@@ -1,0 +1,56 @@
+# GoReleaser builds seaglass binaries and publishes a GitHub Release, a
+# Homebrew tap formula, and checksums. Run by .github/workflows/release.yml
+# on a version tag. Validate locally with: goreleaser check
+version: 2
+
+project_name: seaglass
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: seaglass
+    main: ./cmd/seaglass
+    binary: seaglass
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: seaglass
+    formats: [tar.gz]
+    name_template: "seaglass_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:", "Merge pull request"]
+
+release:
+  github:
+    owner: ctrl-research
+    name: seaglass
+  name_template: "v{{ .Version }}"
+
+homebrew_casks:
+  - name: seaglass
+    repository:
+      owner: ctrl-research
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/ctrl-research/seaglass"
+    description: "A Kubernetes TUI with a config-driven operator layer"
+    # Clear macOS quarantine so the unsigned binary runs without a prompt.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/seaglass"]
+          end

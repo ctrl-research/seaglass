@@ -238,8 +238,9 @@ Config types:
 
 Work items:
 
-- [ ] Rule schema, loader, validation with line-numbered errors, and
-  `seaglass presets list|show`.
+- [x] Rule schema, loader, validation with line-numbered errors (user
+  config cites file:line per rule), and `seaglass presets list|show|
+  validate`.
 - [x] Action engine: config action rules fetch the object, render the
   patch template (with type coercion for ints/bools), apply the merge
   patch, and poll for the wait predicate (field-equals or condition-status)
@@ -312,6 +313,18 @@ Gate: no crashes or hangs in two weeks of daily use across the EKS
 contexts, homelab, and colima.
 
 ### M6 — Distribution (a few days) → `v0.1.0`
+
+- [x] GoReleaser: darwin/linux amd64/arm64 binaries, archives, checksums,
+  GitHub Releases.
+- [x] Automated releases on merge to main; version bumped from the PR label
+  (major/minor/patch, default patch); tag created and pushed by CI.
+- [x] Homebrew tap (ctrl-research/homebrew-tap) via GoReleaser casks.
+- [x] install.sh in the repo (OS/arch detection, checksum verification).
+- [x] `seaglass config init|validate|path`.
+- [ ] One-time setup by a maintainer: create the major/minor/patch labels,
+  the homebrew-tap repo, and the HOMEBREW_TAP_TOKEN secret (see
+  docs/RELEASING.md).
+
 
 Only when it has earned it. Everything before this is `go install` only.
 

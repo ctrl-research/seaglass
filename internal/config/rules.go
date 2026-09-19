@@ -230,17 +230,44 @@ type CommandRule struct {
 
 var badgeStyles = map[string]bool{"ok": true, "warning": true, "error": true, "muted": true}
 
+// Lines maps a rule section ("actions", "jumps", …) to the 1-based source
+// line of each rule, by index, so validation can point at the offending
+// line. A nil or short slice just omits the line.
+type Lines map[string][]int
+
+func (l Lines) at(section string, i int) int {
+	if l == nil {
+		return 0
+	}
+	ls := l[section]
+	if i < 0 || i >= len(ls) {
+		return 0
+	}
+	return ls[i]
+}
+
 // Validate checks a ruleset for semantic errors, prefixing each with the
 // source (e.g. a preset name or the user config path).
 func (r Ruleset) Validate(source string) error {
+	return r.ValidateAt(source, nil)
+}
+
+// ValidateAt is Validate with per-rule source line numbers.
+func (r Ruleset) ValidateAt(source string, lines Lines) error {
 	var errs []string
+	at := func(section string, i int) string {
+		if ln := lines.at(section, i); ln > 0 {
+			return fmt.Sprintf("%s:%d", source, ln)
+		}
+		return source
+	}
 	add := func(format string, args ...any) {
-		errs = append(errs, source+": "+fmt.Sprintf(format, args...))
+		errs = append(errs, fmt.Sprintf(format, args...))
 	}
 	for i, a := range r.Actions {
-		where := fmt.Sprintf("action[%d]", i)
+		where := at("actions", i) + fmt.Sprintf(": action[%d]", i)
 		if a.Name != "" {
-			where = "action " + a.Name
+			where = at("actions", i) + ": action " + a.Name
 		}
 		if a.Name == "" {
 			add("%s: name is required", where)
@@ -259,9 +286,9 @@ func (r Ruleset) Validate(source string) error {
 		}
 	}
 	for i, j := range r.Jumps {
-		where := fmt.Sprintf("jump[%d]", i)
+		where := at("jumps", i) + fmt.Sprintf(": jump[%d]", i)
 		if j.Name != "" {
-			where = "jump " + j.Name
+			where = at("jumps", i) + ": jump " + j.Name
 		}
 		if j.Name == "" {
 			add("%s: name is required", where)
@@ -289,9 +316,9 @@ func (r Ruleset) Validate(source string) error {
 		}
 	}
 	for i, b := range r.Badges {
-		where := fmt.Sprintf("badge[%d]", i)
+		where := at("badges", i) + fmt.Sprintf(": badge[%d]", i)
 		if b.Name != "" {
-			where = "badge " + b.Name
+			where = at("badges", i) + ": badge " + b.Name
 		}
 		if b.Name == "" {
 			add("%s: name is required", where)
@@ -304,9 +331,9 @@ func (r Ruleset) Validate(source string) error {
 		}
 	}
 	for i, g := range r.Groups {
-		where := fmt.Sprintf("group[%d]", i)
+		where := at("groups", i) + fmt.Sprintf(": group[%d]", i)
 		if g.Name != "" {
-			where = "group " + g.Name
+			where = at("groups", i) + ": group " + g.Name
 		}
 		if g.Name == "" {
 			add("%s: name is required", where)
@@ -316,9 +343,9 @@ func (r Ruleset) Validate(source string) error {
 		}
 	}
 	for i, c := range r.Commands {
-		where := fmt.Sprintf("command[%d]", i)
+		where := at("commands", i) + fmt.Sprintf(": command[%d]", i)
 		if c.Name != "" {
-			where = "command " + c.Name
+			where = at("commands", i) + ": command " + c.Name
 		}
 		if c.Name == "" {
 			add("%s: name is required", where)

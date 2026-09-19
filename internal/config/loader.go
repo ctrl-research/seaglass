@@ -102,7 +102,7 @@ func loadFrom(userPath string) (Ruleset, error) {
 		if err := yaml.Unmarshal(b, &user); err != nil {
 			return Ruleset{}, fmt.Errorf("%s: %w", userPath, err)
 		}
-		if err := user.Validate(userPath); err != nil {
+		if err := user.ValidateAt(userPath, ruleLines(b)); err != nil {
 			return Ruleset{}, err
 		}
 	} else if !os.IsNotExist(err) {
@@ -127,4 +127,33 @@ func loadFrom(userPath string) (Ruleset, error) {
 	}
 	out.Merge(user.Ruleset)
 	return out, nil
+}
+
+// ruleLines maps each rule section to the source line of each list item, so
+// validation can cite "file:line". Best-effort: a parse failure yields nil.
+func ruleLines(raw []byte) Lines {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	root := doc.Content[0]
+	out := Lines{}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		key, val := root.Content[i], root.Content[i+1]
+		switch key.Value {
+		case "actions", "jumps", "badges", "commands", "groups":
+			if val.Kind != yaml.SequenceNode {
+				continue
+			}
+			lines := make([]int, len(val.Content))
+			for j, item := range val.Content {
+				lines[j] = item.Line
+			}
+			out[key.Value] = lines
+		}
+	}
+	return out
 }
