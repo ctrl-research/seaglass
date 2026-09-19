@@ -238,8 +238,9 @@ Config types:
 
 Work items:
 
-- [ ] Rule schema, loader, validation with line-numbered errors, and
-  `seaglass presets list|show`.
+- [x] Rule schema, loader, validation with line-numbered errors (user
+  config cites file:line per rule), and `seaglass presets list|show|
+  validate`.
 - [x] Action engine: config action rules fetch the object, render the
   patch template (with type coercion for ints/bools), apply the merge
   patch, and poll for the wait predicate (field-equals or condition-status)
